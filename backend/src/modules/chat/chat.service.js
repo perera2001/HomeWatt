@@ -1,7 +1,6 @@
 const pool = require('../../config/db');
 const ApiError = require('../../utils/apiError');
-
-const PLACEHOLDER_RESPONSE = 'AI service connection will be implemented later.';
+const aiService = require('../ai/ai.service');
 
 const parseSessionId = (sessionId) => {
   const parsedId = Number(sessionId);
@@ -21,12 +20,7 @@ const createTitle = (message) => {
   return `${message.slice(0, 47)}...`;
 };
 
-const createChatResponse = async (userId, { session_id: sessionId, message } = {}) => {
-  if (typeof message !== 'string' || !message.trim()) {
-    throw new ApiError(400, 'Message is required and cannot be empty');
-  }
-
-  const cleanMessage = message.trim();
+const saveUserMessage = async (userId, sessionId, message) => {
   const connection = await pool.getConnection();
 
   try {
@@ -37,7 +31,7 @@ const createChatResponse = async (userId, { session_id: sessionId, message } = {
     if (sessionId === undefined || sessionId === null) {
       const [result] = await connection.execute(
         'INSERT INTO chat_sessions (user_id, title) VALUES (?, ?)',
-        [userId, createTitle(cleanMessage)]
+        [userId, createTitle(message)]
       );
       activeSessionId = result.insertId;
     } else {
@@ -54,12 +48,7 @@ const createChatResponse = async (userId, { session_id: sessionId, message } = {
 
     await connection.execute(
       'INSERT INTO chat_messages (session_id, user_id, role, content) VALUES (?, ?, ?, ?)',
-      [activeSessionId, userId, 'user', cleanMessage]
-    );
-
-    await connection.execute(
-      'INSERT INTO chat_messages (session_id, user_id, role, content) VALUES (?, ?, ?, ?)',
-      [activeSessionId, userId, 'assistant', PLACEHOLDER_RESPONSE]
+      [activeSessionId, userId, 'user', message]
     );
 
     await connection.execute(
@@ -68,18 +57,57 @@ const createChatResponse = async (userId, { session_id: sessionId, message } = {
     );
 
     await connection.commit();
-
-    return {
-      session_id: activeSessionId,
-      user_message: cleanMessage,
-      assistant_response: PLACEHOLDER_RESPONSE
-    };
+    return activeSessionId;
   } catch (error) {
     await connection.rollback();
     throw error;
   } finally {
     connection.release();
   }
+};
+
+const saveAssistantMessage = async (userId, sessionId, answer) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      'INSERT INTO chat_messages (session_id, user_id, role, content) VALUES (?, ?, ?, ?)',
+      [sessionId, userId, 'assistant', answer]
+    );
+    await connection.execute(
+      'UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?',
+      [sessionId, userId]
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+const createChatResponse = async (userId, { session_id: sessionId, message } = {}) => {
+  if (typeof message !== 'string' || !message.trim()) {
+    throw new ApiError(400, 'Message is required and cannot be empty');
+  }
+
+  const cleanMessage = message.trim();
+  const activeSessionId = await saveUserMessage(userId, sessionId, cleanMessage);
+  const assistantResponse = await aiService.sendChatMessageToAiService({
+    userId,
+    sessionId: activeSessionId,
+    message: cleanMessage
+  });
+
+  await saveAssistantMessage(userId, activeSessionId, assistantResponse);
+
+  return {
+    session_id: activeSessionId,
+    user_message: cleanMessage,
+    assistant_response: assistantResponse
+  };
 };
 
 const getSessions = async (userId) => {

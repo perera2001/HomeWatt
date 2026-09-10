@@ -18,6 +18,10 @@ const env = {
     name: process.env.ADMIN_NAME,
     email: process.env.ADMIN_EMAIL,
     password: process.env.ADMIN_PASSWORD
+  },
+  aiService: {
+    url: process.env.AI_SERVICE_URL || 'http://localhost:8000',
+    internalToken: process.env.AI_SERVICE_INTERNAL_TOKEN || ''
   }
 };
 

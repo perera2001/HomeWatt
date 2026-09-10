@@ -48,7 +48,7 @@ npm install
 Or install packages manually:
 
 ```bash
-npm install express mysql2 bcryptjs jsonwebtoken dotenv cors
+npm install express mysql2 bcryptjs jsonwebtoken dotenv cors axios
 npm install --save-dev nodemon
 ```
 
@@ -67,9 +67,11 @@ JWT_EXPIRES_IN=1d
 ADMIN_NAME=System Admin
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin_password_here
+AI_SERVICE_URL=http://localhost:8000
+AI_SERVICE_INTERNAL_TOKEN=
 ```
 
-Do not commit the real `.env` file. The admin password is read from environment variables and is not hardcoded in source code.
+Do not commit the real `.env` file. The admin password is read from environment variables and is not hardcoded in source code. `AI_SERVICE_INTERNAL_TOKEN` can remain empty until the Python service enforces internal authentication.
 
 ## MySQL Database Setup
 
@@ -136,6 +138,24 @@ Health check:
 
 ```text
 GET http://localhost:5000/api/health
+```
+
+## Run the Python AI Service
+
+The Python service must be running on port `8000` before sending chat messages through Node.js.
+
+From the repository's `ai-service` directory on Windows PowerShell:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+Python health check:
+
+```text
+GET http://localhost:8000/health
 ```
 
 ## Postman Tests
@@ -325,7 +345,7 @@ Response:
 
 ### Create a New Chat Session
 
-Requires a user token. The first message becomes the session title, shortened to a maximum of 50 characters.
+Requires a user token and a running Python AI service. The first message becomes the session title, shortened to a maximum of 50 characters.
 
 ```text
 POST http://localhost:5000/api/chat
@@ -346,7 +366,7 @@ Example response:
   "message": "Chat response created successfully",
   "session_id": 1,
   "user_message": "I have TV 100W, iron 1000W and water motor 750W. My budget is Rs. 3000 for September 2026.",
-  "assistant_response": "AI service connection will be implemented later."
+  "assistant_response": "AI service is working. Multi-agent electricity planner will be implemented next."
 }
 ```
 
@@ -374,7 +394,7 @@ Example response:
   "message": "Chat response created successfully",
   "session_id": 1,
   "user_message": "Can you reduce TV usage more?",
-  "assistant_response": "AI service connection will be implemented later."
+  "assistant_response": "AI service is working. Multi-agent electricity planner will be implemented next."
 }
 ```
 
@@ -460,13 +480,15 @@ Example response:
 ## Chat Test Flow
 
 1. Run `sql/schema.sql` in MySQL Workbench to create the two chat tables.
-2. Start the backend with `npm run dev`.
-3. Register a normal user, then log in to receive a user JWT.
-4. Add `Authorization: Bearer USER_TOKEN` to every chat request.
-5. Create a chat with `POST /api/chat` without `session_id`.
-6. Continue it with another `POST /api/chat` using the returned `session_id`.
-7. List sessions, fetch the session history, and then delete it.
-8. Try the same session ID with another user's token; the API returns `404 Chat session not found`.
+2. Start the Python service from `ai-service` with `uvicorn app.main:app --reload --port 8000`.
+3. Confirm `GET http://localhost:8000/health` succeeds.
+4. Start the Node.js backend from `backend` with `npm run dev`.
+5. Register a normal user, then log in to receive a user JWT.
+6. Add `Authorization: Bearer USER_TOKEN` to every chat request.
+7. Create a chat with `POST /api/chat` without `session_id`.
+8. Continue it with another `POST /api/chat` using the returned `session_id`.
+9. List sessions, fetch the session history, and then delete it.
+10. Stop the Python service and send another message to verify Node.js returns `503 AI service is currently unavailable`. The user message remains in chat history without an assistant message.
 
 ## Authorization Rules
 
@@ -482,5 +504,6 @@ Example response:
 ## Notes
 
 - No frontend is implemented in this backend.
-- No Python AI-service connection is implemented yet.
-- The AI module is intentionally separated so future internal service calls can be added cleanly in `src/modules/ai/ai.service.js`.
+- `POST /api/chat` sends user messages to the Python AI service and stores its answer in chat history.
+- Multi-agent and MCP behavior are not implemented yet.
+- The legacy `/api/ai/chat` placeholder remains separate from the chat-history endpoint.
