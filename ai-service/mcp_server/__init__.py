@@ -1,0 +1,1 @@
+"""WattWise MCP server package."""

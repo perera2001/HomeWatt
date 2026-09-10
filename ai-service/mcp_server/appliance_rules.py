@@ -1,0 +1,1 @@
+"""Appliance usage rules placeholder."""

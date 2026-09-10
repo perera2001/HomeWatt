@@ -1,0 +1,13 @@
+# Python dependencies will be added when the AI service is implemented.
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+
+langchain
+langchain-openai
+langgraph
+langchain-mcp-adapters
+
+mcp
+openai
