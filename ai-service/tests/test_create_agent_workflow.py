@@ -46,6 +46,8 @@ class CreateAgentWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(state["estimated_bill"], state["usage_plan"]["estimated_bill"])
         self.assertIn("budget_limit_result", state)
+        self.assertEqual(state["tariff_resource"]["country"], "Sri Lanka")
+        self.assertIn("water motor", state["appliance_rules_resource"])
 
 
 if __name__ == "__main__":

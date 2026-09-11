@@ -52,6 +52,8 @@ class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(state["appliances"]), 3)
         self.assertEqual(state["usage_plan"]["year"], 2026)
         self.assertIn("estimated_bill", state["usage_plan"])
+        self.assertEqual(state["tariff_resource"]["tariff_version"], "2026-05")
+        self.assertIn("TV", state["appliance_rules_resource"])
 
 
 if __name__ == "__main__":

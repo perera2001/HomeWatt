@@ -134,6 +134,14 @@ async def read_mcp_resource(uri: str) -> Any:
         raise MCPClientError(f"MCP resource '{uri}' failed: {exc}") from exc
 
 
+async def read_tariff_resource_via_mcp() -> dict[str, Any]:
+    return await read_mcp_resource("tariff://sri-lanka/domestic/2026-05")
+
+
+async def read_appliance_priority_rules_via_mcp() -> dict[str, Any]:
+    return await read_mcp_resource("appliances://priority-rules")
+
+
 async def get_mcp_prompt(prompt_name: str, arguments: dict[str, Any]) -> str:
     """Fetch an MCP prompt and return it as text."""
     try:
