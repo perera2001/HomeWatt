@@ -17,8 +17,6 @@ class HomeWattState(TypedDict, total=False):
     max_budget_lkr: float
     appliances: list[dict[str, Any]]
     appliance_priorities: list[dict[str, Any]]
-    tariff_resource: dict[str, Any]
-    appliance_rules_resource: dict[str, Any]
 
     billing_days: int
     estimated_allowed_units: float

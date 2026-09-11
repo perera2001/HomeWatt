@@ -13,7 +13,6 @@ from app.agents.tools import (
     validate_appliance_input_tool,
 )
 from app.graph.state import HomeWattState
-from app.mcp_client.client import MCPClientError, read_appliance_priority_rules_via_mcp
 
 
 MONTHS = {
@@ -232,14 +231,7 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
         }
 
     appliances = [item.model_dump() for item in extraction.appliances]
-    try:
-        appliance_rules_resource = await read_appliance_priority_rules_via_mcp()
-        appliance_priorities = await _classify_appliances(appliances)
-    except MCPClientError as exc:
-        return {
-            **state,
-            "error": f"Could not read appliance rules resource: {exc}",
-        }
+    appliance_priorities = await _classify_appliances(appliances)
 
     return {
         **state,
@@ -248,5 +240,4 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
         "max_budget_lkr": extraction.max_budget_lkr,
         "appliances": appliances,
         "appliance_priorities": appliance_priorities,
-        "appliance_rules_resource": appliance_rules_resource,
     }
