@@ -182,3 +182,19 @@ async def calculate_budget_unit_limit_via_mcp(
         "calculate_budget_unit_limit",
         {"year": year, "month": month, "max_budget_lkr": max_budget_lkr},
     )
+
+
+async def classify_appliance_priority_via_mcp(item_name: str) -> dict[str, Any]:
+    return await call_mcp_tool(
+        "classify_appliance_priority",
+        {"item_name": item_name},
+    )
+
+
+async def calculate_appliance_kwh_via_mcp(
+    watts: float, hours_per_day: float, days: int
+) -> dict[str, Any]:
+    return await call_mcp_tool(
+        "calculate_appliance_kwh",
+        {"watts": watts, "hours_per_day": hours_per_day, "days": days},
+    )

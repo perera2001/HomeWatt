@@ -2,7 +2,7 @@
 
 Python FastAPI service and deterministic MCP server for Sri Lankan domestic electricity planning.
 
-The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. The `/chat` route uses a rule-based LangGraph workflow that calls MCP tools through the MCP client. OpenAI calls are intentionally not implemented yet.
+The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. The `/chat` route uses a hybrid LangGraph workflow: LLM-powered LangChain `create_agent()` agents where useful, deterministic MCP nodes for calculations, and rule-based fallback when `OPENAI_API_KEY` is not configured.
 
 ## Install
 
@@ -24,15 +24,15 @@ Current `/chat` flow:
 ```text
 FastAPI /chat
  -> LangGraph workflow
- -> Supervisor
- -> Appliance Analyzer
- -> Bill Calculator
- -> Usage Optimizer
- -> Guide Writer
+ -> Supervisor Agent created with create_agent()
+ -> Appliance Analyzer Agent created with create_agent()
+ -> Bill Calculator deterministic MCP node
+ -> Usage Optimizer deterministic MCP node
+ -> Guide Writer Agent created with create_agent()
  -> Final answer
 ```
 
-The first version uses simple rule-based parsing and MCP tool calls only. It does not call OpenAI.
+Bill and usage calculations stay inside MCP tools. If `OPENAI_API_KEY` is empty, the workflow uses beginner-readable rule-based fallback for supervisor, extraction, and guide writing.
 
 ## Internal Service Token
 

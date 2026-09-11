@@ -2,10 +2,18 @@
 
 import unittest
 
+from app.config import settings
 from app.graph.workflow import run_homewatt_workflow
 
 
 class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.original_openai_api_key = settings.openai_api_key
+        settings.openai_api_key = ""
+
+    def tearDown(self):
+        settings.openai_api_key = self.original_openai_api_key
+
     async def test_greeting_returns_casual_response(self):
         result = await run_homewatt_workflow(
             user_id=1,

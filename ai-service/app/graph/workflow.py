@@ -12,6 +12,12 @@ from app.agents.supervisor import supervisor_node
 from app.graph.state import HomeWattState
 
 
+def _next_after_supervisor(state: HomeWattState) -> Literal["appliance_analyzer", "guide_writer"]:
+    if state.get("error"):
+        return "guide_writer"
+    return "appliance_analyzer"
+
+
 def _next_after_appliance(state: HomeWattState) -> Literal["bill_calculator", "guide_writer"]:
     if state.get("error") or state.get("casual_response"):
         return "guide_writer"
@@ -38,7 +44,7 @@ def build_homewatt_graph():
     graph.add_node("guide_writer", guide_writer_node)
 
     graph.add_edge(START, "supervisor")
-    graph.add_edge("supervisor", "appliance_analyzer")
+    graph.add_conditional_edges("supervisor", _next_after_supervisor)
     graph.add_conditional_edges("appliance_analyzer", _next_after_appliance)
     graph.add_conditional_edges("bill_calculator", _next_after_mcp)
     graph.add_conditional_edges("usage_optimizer", _next_after_optimizer)

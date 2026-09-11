@@ -11,10 +11,12 @@ class HomeWattState(TypedDict, total=False):
     is_valid: bool
     intent: str
     casual_response: str
+    supervisor_decision: dict[str, Any]
     year: int
     month: int
     max_budget_lkr: float
     appliances: list[dict[str, Any]]
+    appliance_priorities: list[dict[str, Any]]
 
     billing_days: int
     estimated_allowed_units: float
