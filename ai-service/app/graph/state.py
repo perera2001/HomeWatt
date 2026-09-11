@@ -9,6 +9,8 @@ class HomeWattState(TypedDict, total=False):
     message: str
 
     is_valid: bool
+    intent: str
+    casual_response: str
     year: int
     month: int
     max_budget_lkr: float

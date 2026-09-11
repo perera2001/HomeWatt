@@ -6,6 +6,18 @@ from app.graph.workflow import run_homewatt_workflow
 
 
 class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_greeting_returns_casual_response(self):
+        result = await run_homewatt_workflow(
+            user_id=1,
+            session_id=1,
+            message="hello",
+        )
+
+        self.assertEqual(result["answer"], "Hi, how can I assist you today?")
+        self.assertEqual(result["state"]["intent"], "greeting")
+        self.assertNotIn("error", result["state"])
+        self.assertNotIn("usage_plan", result["state"])
+
     async def test_budget_message_creates_usage_plan(self):
         result = await run_homewatt_workflow(
             user_id=1,

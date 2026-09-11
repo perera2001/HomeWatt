@@ -13,7 +13,7 @@ from app.graph.state import HomeWattState
 
 
 def _next_after_appliance(state: HomeWattState) -> Literal["bill_calculator", "guide_writer"]:
-    if state.get("error"):
+    if state.get("error") or state.get("casual_response"):
         return "guide_writer"
     return "bill_calculator"
 

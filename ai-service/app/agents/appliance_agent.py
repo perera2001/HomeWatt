@@ -33,6 +33,14 @@ MONTHS = {
     "dec": 12,
 }
 
+GREETING_WORDS = {"hi", "hello", "hey", "hai"}
+
+
+def _is_greeting(message: str) -> bool:
+    normalized = re.sub(r"[^a-z\s]", " ", message.lower())
+    words = {word for word in normalized.split() if word}
+    return bool(words) and words.issubset(GREETING_WORDS)
+
 
 def _extract_month_year(message: str) -> tuple[int | None, int | None]:
     month_pattern = "|".join(sorted(MONTHS, key=len, reverse=True))
@@ -89,6 +97,13 @@ def _extract_appliances(message: str) -> list[dict[str, Any]]:
 async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
     """Extract year, month, budget, and appliances from a simple user message."""
     message = state.get("message", "")
+    if _is_greeting(message):
+        return {
+            **state,
+            "intent": "greeting",
+            "casual_response": "Hi, how can I assist you today?",
+        }
+
     month, year = _extract_month_year(message)
     budget = _extract_budget(message)
     appliances = _extract_appliances(message)

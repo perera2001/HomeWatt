@@ -11,6 +11,12 @@ def _money(value: float) -> str:
 
 async def guide_writer_node(state: HomeWattState) -> HomeWattState:
     """Create a readable answer from workflow state without calling an LLM."""
+    if state.get("casual_response"):
+        return {
+            **state,
+            "final_answer": state["casual_response"],
+        }
+
     if state.get("error"):
         return {
             **state,
