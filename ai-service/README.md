@@ -2,7 +2,7 @@
 
 Python FastAPI service and deterministic MCP server for Sri Lankan domestic electricity planning.
 
-The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. LangGraph agents and OpenAI calls are intentionally not implemented yet.
+The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. The `/chat` route uses a rule-based LangGraph workflow that calls MCP tools through the MCP client. OpenAI calls are intentionally not implemented yet.
 
 ## Install
 
@@ -16,6 +16,23 @@ pip install -r requirements.txt
 ```powershell
 uvicorn app.main:app --reload --port 8000
 ```
+
+## Chat Workflow
+
+Current `/chat` flow:
+
+```text
+FastAPI /chat
+ -> LangGraph workflow
+ -> Supervisor
+ -> Appliance Analyzer
+ -> Bill Calculator
+ -> Usage Optimizer
+ -> Guide Writer
+ -> Final answer
+```
+
+The first version uses simple rule-based parsing and MCP tool calls only. It does not call OpenAI.
 
 ## Internal Service Token
 

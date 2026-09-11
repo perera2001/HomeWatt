@@ -1,7 +1,7 @@
-"""Temporary chat route that exercises the MCP client directly."""
-from fastapi import APIRouter, Depends, HTTPException
+"""Chat route for the HomeWatt Advisor workflow."""
+from fastapi import APIRouter, Depends
 
-from app.mcp_client.client import MCPClientError, generate_initial_usage_plan_via_mcp
+from app.graph.workflow import run_homewatt_workflow
 from app.security.internal_auth import verify_internal_token
 from app.schemas import ChatRequest, ChatResponse
 
@@ -13,31 +13,12 @@ async def chat(
     request: ChatRequest,
     _: None = Depends(verify_internal_token),
 ):
-    message = request.message.lower()
-    is_budget_test = "budget" in message and "may" in message and "2026" in message
-    if not is_budget_test:
-        return ChatResponse(
-            answer="AI service is working. Send the May 2026 budget test message to run MCP."
-        )
-
-    # Temporary deterministic test path until natural-language parsing and agents exist.
-    test_appliances = [
-        {"name": "TV", "watts": 100},
-        {"name": "Iron", "watts": 1000},
-        {"name": "Water motor", "watts": 750},
-    ]
-
-    try:
-        mcp_result = await generate_initial_usage_plan_via_mcp(
-            year=2026,
-            month=5,
-            max_budget_lkr=3000,
-            appliances=test_appliances,
-        )
-    except MCPClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
+    result = await run_homewatt_workflow(
+        user_id=request.user_id,
+        session_id=request.session_id,
+        message=request.message,
+    )
     return ChatResponse(
-        answer="MCP usage plan generated successfully.",
-        mcp_result=mcp_result,
+        answer=result["answer"],
+        mcp_result=result.get("state"),
     )
