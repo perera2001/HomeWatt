@@ -1,4 +1,6 @@
-"""Request and response schema placeholders."""
+"""Request and response schemas."""
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -10,3 +12,4 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    mcp_result: dict[str, Any] | list[Any] | str | None = None
