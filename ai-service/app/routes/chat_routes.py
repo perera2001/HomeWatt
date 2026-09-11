@@ -1,14 +1,18 @@
 """Temporary chat route that exercises the MCP client directly."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.mcp_client.client import MCPClientError, generate_initial_usage_plan_via_mcp
+from app.security.internal_auth import verify_internal_token
 from app.schemas import ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    _: None = Depends(verify_internal_token),
+):
     message = request.message.lower()
     is_budget_test = "budget" in message and "may" in message and "2026" in message
     if not is_budget_test:

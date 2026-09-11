@@ -2,7 +2,7 @@
 
 Python FastAPI service and deterministic MCP server for Sri Lankan domestic electricity planning.
 
-The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. LangGraph agents, OpenAI calls, and MCP client integration are intentionally not implemented yet.
+The MCP layer currently provides tariff resources, appliance priority rules, bill tools, budget planning tools, and grounded prompt templates. LangGraph agents and OpenAI calls are intentionally not implemented yet.
 
 ## Install
 
@@ -15,6 +15,47 @@ pip install -r requirements.txt
 
 ```powershell
 uvicorn app.main:app --reload --port 8000
+```
+
+## Internal Service Token
+
+The Node.js backend and Python AI service should use the same shared token so only the backend can call Python `/chat`.
+
+Node.js `.env`:
+
+```env
+AI_SERVICE_URL=http://localhost:8000
+AI_SERVICE_INTERNAL_TOKEN=your_shared_secret_here
+```
+
+Python `ai-service/.env`:
+
+```env
+AI_SERVICE_INTERNAL_TOKEN=your_shared_secret_here
+```
+
+When `AI_SERVICE_INTERNAL_TOKEN` is configured in Python, `/chat` requires:
+
+```http
+Authorization: Bearer your_shared_secret_here
+```
+
+For local development only, if Python `AI_SERVICE_INTERNAL_TOKEN` is empty, `/chat` allows requests without the header.
+
+Postman example:
+
+```http
+POST http://localhost:8000/chat
+Content-Type: application/json
+Authorization: Bearer your_shared_secret_here
+```
+
+```json
+{
+  "user_id": 1,
+  "session_id": 1,
+  "message": "My budget is Rs. 3000 for May 2026. I have TV 100W, iron 1000W and water motor 750W."
+}
 ```
 
 ## Run MCP Server
