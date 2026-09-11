@@ -13,7 +13,7 @@ const sendChatMessageToAiService = async ({ userId, sessionId, message }) => {
   const headers = {};
 
   if (env.aiService.internalToken) {
-    headers['X-Internal-Token'] = env.aiService.internalToken;
+    headers.Authorization = `Bearer ${env.aiService.internalToken}`;
   }
 
   try {
