@@ -355,7 +355,7 @@ Content-Type: application/json
 
 ```json
 {
-  "message": "I have TV 100W, iron 1000W and water motor 750W. My budget is Rs. 3000 for September 2026."
+  "message": "My budget is Rs. 600 for May 2026. I need TV 100W for 2 hours/day, iron 1000W for 15 minutes/day and water motor 750W for 1.5 hours/day."
 }
 ```
 
@@ -365,7 +365,7 @@ Example response:
 {
   "message": "Chat response created successfully",
   "session_id": 1,
-  "user_message": "I have TV 100W, iron 1000W and water motor 750W. My budget is Rs. 3000 for September 2026.",
+  "user_message": "My budget is Rs. 600 for May 2026. I need TV 100W for 2 hours/day, iron 1000W for 15 minutes/day and water motor 750W for 1.5 hours/day.",
   "assistant_response": "AI service is working. Multi-agent electricity planner will be implemented next."
 }
 ```
@@ -415,7 +415,7 @@ Example response:
   "sessions": [
     {
       "id": 1,
-      "title": "I have TV 100W, iron 1000W and water motor...",
+      "title": "TV 100W for 2 hours/day, iron 1000W for...",
       "created_at": "2026-09-10T06:00:00.000Z",
       "updated_at": "2026-09-10T06:05:00.000Z"
     }
@@ -439,14 +439,14 @@ Example response:
   "message": "Chat session fetched successfully",
   "session": {
     "id": 1,
-    "title": "I have TV 100W, iron 1000W and water motor...",
+    "title": "TV 100W for 2 hours/day, iron 1000W for...",
     "created_at": "2026-09-10T06:00:00.000Z",
     "updated_at": "2026-09-10T06:05:00.000Z",
     "messages": [
       {
         "id": 1,
         "role": "user",
-        "content": "I have TV 100W, iron 1000W and water motor 750W. My budget is Rs. 3000 for September 2026.",
+        "content": "My budget is Rs. 600 for May 2026. TV 100W for 2 hours/day, iron 1000W for 15 minutes/day and water motor 750W for 1.5 hours/day.",
         "created_at": "2026-09-10T06:00:00.000Z"
       },
       {
