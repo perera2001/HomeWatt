@@ -177,13 +177,15 @@ def _fallback_extract(message: str) -> ApplianceExtraction:
         if item["required_hours_per_day"] is None
     ]
     if missing_hours:
+        appliance_names = ", ".join(missing_hours)
+        example_name = missing_hours[0]
         return ApplianceExtraction(
             year=year,
             month=month,
             max_budget_lkr=budget,
             error=(
-                "Please include required hours per day for every appliance. "
-                "Example: water motor 750W for 1.5 hours/day."
+                f"Please enter required hours per day for {appliance_names}. "
+                f"Example: {example_name} 100W for 2 hours/day."
             ),
         )
 
@@ -262,6 +264,13 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
             "casual_response": "Hi, how can I assist you today?",
         }
 
+    fallback_extraction = _fallback_extract(message)
+    if fallback_extraction.error:
+        return {
+            **state,
+            "error": fallback_extraction.error,
+        }
+
     used_openai = has_openai_config()
     if used_openai:
         try:
@@ -278,13 +287,12 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
             )
             extraction = _extraction_from_agent_result(result)
         except Exception:
-            extraction = _fallback_extract(message)
+            extraction = fallback_extraction
     else:
-        extraction = _fallback_extract(message)
+        extraction = fallback_extraction
 
     error = _missing_fields_error(extraction)
     if error and used_openai:
-        fallback_extraction = _fallback_extract(message)
         fallback_error = _missing_fields_error(fallback_extraction)
         if not fallback_error:
             extraction = fallback_extraction

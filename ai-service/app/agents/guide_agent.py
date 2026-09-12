@@ -195,6 +195,12 @@ async def guide_writer_node(state: HomeWattState) -> HomeWattState:
         }
 
     if state.get("error"):
+        if state["error"].startswith("Please enter"):
+            return {
+                **state,
+                "final_answer": state["error"],
+            }
+
         example = ""
         if "Example:" not in state["error"]:
             example = (

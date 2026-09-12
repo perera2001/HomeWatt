@@ -68,6 +68,23 @@ class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("electricity usage planning", result["answer"])
         self.assertNotIn("usage_plan", result["state"])
 
+    async def test_missing_appliance_hours_returns_simple_message(self):
+        result = await run_homewatt_workflow(
+            user_id=1,
+            session_id=1,
+            message=(
+                "My maximum budget is Rs. 600 for May 2026. I need TV 100W, "
+                "iron 1000W for 0.25 hours/day, and water motor 750W for "
+                "1.5 hours/day."
+            ),
+        )
+
+        self.assertEqual(
+            result["answer"],
+            "Please enter required hours per day for TV. Example: TV 100W for 2 hours/day.",
+        )
+        self.assertNotIn("usage_plan", result["state"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -55,7 +55,45 @@ class ApplianceExtractionTests(unittest.IsolatedAsyncioTestCase):
         extraction = _fallback_extract(
             "My budget is Rs. 600 for May 2026. TV 100W."
         )
-        self.assertIn("required hours per day for every appliance", _missing_fields_error(extraction))
+        self.assertEqual(
+            _missing_fields_error(extraction),
+            "Please enter required hours per day for TV. Example: TV 100W for 2 hours/day.",
+        )
+
+    @patch("app.agents.appliance_agent.has_openai_config", return_value=True)
+    @patch("app.agents.appliance_agent.create_appliance_analyzer_agent")
+    async def test_llm_cannot_guess_missing_required_hours(
+        self, mock_create_agent, _mock_openai_config
+    ):
+        mock_create_agent.return_value.ainvoke = AsyncMock(
+            return_value={
+                "structured_response": {
+                    "year": 2026,
+                    "month": 5,
+                    "max_budget_lkr": 600,
+                    "appliances": [
+                        {"name": "TV", "watts": 100, "required_hours_per_day": 0.25},
+                        {"name": "iron", "watts": 1000, "required_hours_per_day": 0.25},
+                        {"name": "water motor", "watts": 750, "required_hours_per_day": 1.5},
+                    ],
+                }
+            }
+        )
+        state = await appliance_analyzer_node(
+            {
+                "message": (
+                    "My maximum budget is Rs. 600 for May 2026. I need TV 100W, "
+                    "iron 1000W for 0.25 hours/day, and water motor 750W for "
+                    "1.5 hours/day."
+                )
+            }
+        )
+
+        self.assertEqual(
+            state["error"],
+            "Please enter required hours per day for TV. Example: TV 100W for 2 hours/day.",
+        )
+        mock_create_agent.assert_not_called()
 
     def test_hours_range_validation(self):
         for hours, expected in ((0, "greater than 0"), (-1, "greater than 0"), (25, "must not exceed 24")):
