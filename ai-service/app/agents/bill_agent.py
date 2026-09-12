@@ -21,6 +21,17 @@ async def bill_calculator_node(state: HomeWattState) -> HomeWattState:
             "error": f"Could not calculate budget unit limit: {exc}",
         }
 
+    required_fields = {
+        "billing_days",
+        "estimated_allowed_units",
+        "estimated_bill",
+    }
+    if not isinstance(result, dict) or not required_fields.issubset(result):
+        return {
+            **state,
+            "error": "Could not calculate budget unit limit: invalid MCP response.",
+        }
+
     return {
         **state,
         "billing_days": result["billing_days"],

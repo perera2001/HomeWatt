@@ -32,7 +32,8 @@ class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
             session_id=1,
             message=(
                 "My budget is Rs. 3000 for May 2026. "
-                "I have TV 100W, iron 1000W and water motor 750W."
+                "I need TV 100W for 2 hours/day, iron 1000W for 15 minutes/day "
+                "and water motor 750W for 1.5 hours/day."
             ),
         )
 
@@ -52,8 +53,20 @@ class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(state["appliances"]), 3)
         self.assertEqual(state["usage_plan"]["year"], 2026)
         self.assertIn("estimated_bill", state["usage_plan"])
+        self.assertEqual(state["appliances"][1]["required_hours_per_day"], 0.25)
         self.assertNotIn("tariff_resource", state)
         self.assertNotIn("appliance_rules_resource", state)
+
+    async def test_unsupported_request_stops_before_planning(self):
+        result = await run_homewatt_workflow(
+            user_id=1,
+            session_id=1,
+            message="Tell me a joke",
+        )
+
+        self.assertFalse(result["state"]["is_valid"])
+        self.assertIn("electricity usage planning", result["answer"])
+        self.assertNotIn("usage_plan", result["state"])
 
 
 if __name__ == "__main__":

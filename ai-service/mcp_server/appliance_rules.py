@@ -97,54 +97,82 @@ def classify_appliance_priority_data(item_name: str) -> dict[str, str]:
     }
 
 
-def _baseline_hours(normalized_name: str, priority: str) -> float:
-    name_tokens = normalized_name.split()
-    if "decorative" in normalized_name and "light" in normalized_name:
-        return 1.0
-    if "water motor" in normalized_name or "water pump" in normalized_name:
-        return 0.5
-    if "refrigerator" in normalized_name or "fridge" in normalized_name:
-        return 8.0
-    if "washing machine" in normalized_name or "washer" in normalized_name:
-        return 0.4
-    if "rice cooker" in normalized_name:
-        return 1.0
-    if "light" in normalized_name or "lamp" in normalized_name:
-        return 5.0
-    if "fan" in normalized_name:
-        return 6.0
-    if "iron" in normalized_name:
-        return 0.25
-    if "tv" in name_tokens or "television" in name_tokens:
-        return 2.0
-    return {"high": 4.0, "medium": 2.0, "low": 1.0}[priority]
-
-
 def _reduce_priority_group(
     plan: list[dict[str, Any]],
     priority: str,
-    minimum_fraction: float,
     excess_units: float,
     days: int,
 ) -> float:
     group = [item for item in plan if item["priority"] == priority]
-    current_units = sum(item["watts"] * item["hours"] * days / 1000 for item in group)
-    minimum_units = sum(
-        item["watts"] * item["baseline_hours"] * minimum_fraction * days / 1000
+    current_units = sum(
+        item["watts"] * item["suggested_hours_per_day"] * days / 1000
         for item in group
     )
-    reducible_units = max(0.0, current_units - minimum_units)
-    reduction = min(excess_units, reducible_units)
+    reduction = min(excess_units, current_units)
 
     if current_units > 0 and reduction > 0:
+        # Appliances in the same priority group are reduced proportionally.
         scale = (current_units - reduction) / current_units
         for item in group:
-            item["hours"] = max(
-                item["baseline_hours"] * minimum_fraction,
-                item["hours"] * scale,
+            item["suggested_hours_per_day"] = max(
+                0.0,
+                item["suggested_hours_per_day"] * scale,
             )
 
     return excess_units - reduction
+
+
+def _floor_hours(hours: float) -> float:
+    """Floor hours to four decimals so display rounding cannot add energy."""
+    return math.floor((hours + 1e-12) * 10000) / 10000
+
+
+def _make_affordable_items(
+    requested_items: list[dict[str, Any]],
+    target_units: float,
+    days: int,
+) -> list[dict[str, Any]]:
+    plan = [
+        {
+            **item,
+            "suggested_hours_per_day": item["required_hours_per_day"],
+        }
+        for item in requested_items
+    ]
+    requested_total_units = round(
+        sum(item["requested_monthly_units"] for item in requested_items), 2
+    )
+    excess_units = max(0.0, requested_total_units - target_units)
+
+    for priority in ("low", "medium", "high"):
+        excess_units = _reduce_priority_group(plan, priority, excess_units, days)
+
+    affordable_items = []
+    for item in plan:
+        suggested_hours = _floor_hours(item["suggested_hours_per_day"])
+        estimated_units = calculate_appliance_kwh_data(
+            item["watts"], suggested_hours, days
+        )["kwh"]
+        affordable_items.append(
+            {
+                "name": item["name"],
+                "watts": item["watts"],
+                "normalized_name": item["normalized_name"],
+                "priority": item["priority"],
+                "category_note": item["category_note"],
+                "required_hours_per_day": item["required_hours_per_day"],
+                "suggested_hours_per_day": suggested_hours,
+                "requested_monthly_units": item["requested_monthly_units"],
+                "estimated_monthly_units": estimated_units,
+                "requirement_met": (
+                    suggested_hours + 1e-9 >= item["required_hours_per_day"]
+                ),
+                "hours_reduced_per_day": round(
+                    max(0.0, item["required_hours_per_day"] - suggested_hours), 4
+                ),
+            }
+        )
+    return affordable_items
 
 
 def generate_initial_usage_plan_data(
@@ -153,76 +181,121 @@ def generate_initial_usage_plan_data(
     max_budget_lkr: float,
     appliances: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Create a deterministic first-pass usage plan within the bill budget."""
+    """Compare requested usage with the budget and create an affordable plan."""
     if not isinstance(appliances, list) or not appliances:
         raise ValueError("appliances must be a non-empty list")
 
     budget_limit = calculate_budget_unit_limit_data(year, month, max_budget_lkr)
     days = budget_limit["billing_days"]
-    allowed_units = budget_limit["estimated_allowed_units"]
-    plan: list[dict[str, Any]] = []
+    allowed_units = float(budget_limit["estimated_allowed_units"])
+    requested_items: list[dict[str, Any]] = []
 
     for appliance in appliances:
         if not isinstance(appliance, dict):
-            raise ValueError("each appliance must be an object with name and watts")
+            raise ValueError(
+                "each appliance must contain name, watts, and required_hours_per_day"
+            )
 
         name = appliance.get("name")
         watts = appliance.get("watts")
+        required_hours = appliance.get("required_hours_per_day")
         classification = classify_appliance_priority_data(name)
-        calculate_appliance_kwh_data(watts, 0, days)
-        baseline_hours = _baseline_hours(
-            classification["normalized_name"], classification["priority"]
-        )
-        plan.append(
+        if required_hours is None:
+            raise ValueError(f"required_hours_per_day is required for {name}")
+        if isinstance(required_hours, bool) or not isinstance(required_hours, (int, float)):
+            raise ValueError(f"required_hours_per_day must be a number for {name}")
+        required_hours = float(required_hours)
+        if not math.isfinite(required_hours) or required_hours <= 0:
+            raise ValueError(f"required_hours_per_day must be greater than 0 for {name}")
+        if required_hours > 24:
+            raise ValueError(f"required_hours_per_day must not exceed 24 for {name}")
+
+        requested_units = calculate_appliance_kwh_data(
+            watts, required_hours, days
+        )["kwh"]
+        requested_items.append(
             {
-                **classification,
+                "name": classification["item_name"],
                 "watts": float(watts),
-                "baseline_hours": baseline_hours,
-                "hours": baseline_hours,
+                "normalized_name": classification["normalized_name"],
+                "priority": classification["priority"],
+                "category_note": classification["category_note"],
+                "required_hours_per_day": required_hours,
+                "requested_monthly_units": requested_units,
             }
         )
 
-    total_units = sum(item["watts"] * item["hours"] * days / 1000 for item in plan)
-    excess_units = max(0.0, total_units - allowed_units)
+    requested_total_units = round(
+        sum(item["requested_monthly_units"] for item in requested_items), 2
+    )
+    requested_bill = calculate_domestic_bill_data(year, month, requested_total_units)
+    minimum_required_budget = requested_bill["monthly_bill"]
+    minimum_possible_bill = calculate_domestic_bill_data(year, month, 0)["monthly_bill"]
+    budget = float(budget_limit["max_budget_lkr"])
+    budget_shortfall = round(max(0.0, minimum_required_budget - budget), 2)
+    remaining_budget = round(max(0.0, budget - minimum_required_budget), 2)
+    budget_feasible = budget >= minimum_possible_bill
+    requirements_met = budget_feasible and minimum_required_budget <= budget
+    adjustments_required = budget_feasible and not requirements_met
 
-    for priority, minimum_fraction in (("low", 0.0), ("medium", 0.25), ("high", 0.5)):
-        excess_units = _reduce_priority_group(
-            plan, priority, minimum_fraction, excess_units, days
+    requested_plan = {
+        "appliances": requested_items,
+        "total_units": requested_total_units,
+        "estimated_bill": minimum_required_budget,
+        "bill_breakdown": requested_bill,
+    }
+
+    affordable_plan = None
+    usage_items: list[dict[str, Any]] = []
+    total_units = 0.0
+    estimated_bill = minimum_possible_bill
+
+    if budget_feasible:
+        target_units = requested_total_units if requirements_met else allowed_units
+        usage_items = _make_affordable_items(requested_items, target_units, days)
+        total_units = round(
+            sum(item["estimated_monthly_units"] for item in usage_items), 2
         )
+        bill = calculate_domestic_bill_data(year, month, total_units)
 
-    if excess_units > 0:
-        current_units = sum(item["watts"] * item["hours"] * days / 1000 for item in plan)
-        scale = max(0.0, (current_units - excess_units) / current_units) if current_units else 0
-        for item in plan:
-            item["hours"] *= scale
+        # A two-decimal unit round-up or tariff boundary must never exceed budget.
+        while bill["monthly_bill"] > budget and target_units > 0:
+            target_units = max(0.0, round(target_units - 0.01, 2))
+            usage_items = _make_affordable_items(requested_items, target_units, days)
+            total_units = round(
+                sum(item["estimated_monthly_units"] for item in usage_items), 2
+            )
+            bill = calculate_domestic_bill_data(year, month, total_units)
 
-    usage_items = []
-    for item in plan:
-        hours = math.floor((item["hours"] + 1e-9) * 100) / 100
-        units = calculate_appliance_kwh_data(item["watts"], hours, days)["kwh"]
-        usage_items.append(
-            {
-                "name": item["item_name"],
-                "watts": item["watts"],
-                "normalized_name": item["normalized_name"],
-                "priority": item["priority"],
-                "category_note": item["category_note"],
-                "suggested_hours_per_day": hours,
-                "estimated_monthly_units": round(units, 2),
-            }
-        )
-
-    planned_units = round(sum(item["estimated_monthly_units"] for item in usage_items), 2)
-    bill = calculate_domestic_bill_data(year, month, planned_units)
+        estimated_bill = bill["monthly_bill"]
+        affordable_plan = {
+            "appliances": usage_items,
+            "total_units": total_units,
+            "estimated_bill": estimated_bill,
+            "bill_breakdown": bill,
+            "stays_within_budget": estimated_bill <= budget,
+        }
 
     return {
         "year": year,
         "month": month,
         "billing_days": days,
-        "max_budget_lkr": budget_limit["max_budget_lkr"],
+        "max_budget_lkr": budget,
         "estimated_allowed_units": allowed_units,
+        "requested_plan": requested_plan,
+        "affordable_plan": affordable_plan,
+        "requested_total_units": requested_total_units,
+        "minimum_required_budget": minimum_required_budget,
+        "minimum_possible_bill": minimum_possible_bill,
+        "budget_shortfall": budget_shortfall,
+        "remaining_budget": remaining_budget,
+        "requirements_met": requirements_met,
+        "adjustments_required": adjustments_required,
+        "budget_feasible": budget_feasible,
         "appliances": usage_items,
-        "total_units": planned_units,
-        "estimated_bill": bill["monthly_bill"],
-        "stays_within_budget": bill["monthly_bill"] <= budget_limit["max_budget_lkr"],
+        "total_units": total_units,
+        "estimated_bill": estimated_bill,
+        "stays_within_budget": bool(
+            affordable_plan and affordable_plan["stays_within_budget"]
+        ),
     }

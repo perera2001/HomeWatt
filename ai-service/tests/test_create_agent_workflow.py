@@ -28,14 +28,15 @@ class CreateAgentWorkflowTests(unittest.IsolatedAsyncioTestCase):
             session_id=1,
             message=(
                 "My budget is Rs. 3000 for May 2026. "
-                "I have TV 100W, iron 1000W and water motor 750W."
+                "I need TV 100W for 2 hours/day, iron 1000W for 0.25 hours/day "
+                "and water motor 750W for 1.5 hours/day."
             ),
         )
 
         answer = result["answer"]
         state = result["state"]
 
-        self.assertIn("Recommended usage", answer)
+        self.assertIn("Requested usage", answer)
         self.assertIn("Estimated bill", answer)
         self.assertEqual(state["year"], 2026)
         self.assertEqual(state["month"], 5)

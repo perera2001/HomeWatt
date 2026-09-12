@@ -24,6 +24,16 @@ class HomeWattState(TypedDict, total=False):
     budget_limit_result: dict[str, Any]
 
     usage_plan: dict[str, Any]
+    requested_plan: dict[str, Any]
+    affordable_plan: dict[str, Any] | None
+    requested_total_units: float
+    minimum_required_budget: float
+    minimum_possible_bill: float
+    budget_shortfall: float
+    remaining_budget: float
+    requirements_met: bool
+    adjustments_required: bool
+    budget_feasible: bool
     total_units: float
     estimated_bill: float
     stays_within_budget: bool

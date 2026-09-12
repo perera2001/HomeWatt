@@ -74,9 +74,9 @@ class ApplianceToolTests(unittest.TestCase):
             5,
             3000,
             [
-                {"name": "TV", "watts": 100},
-                {"name": "Iron", "watts": 1000},
-                {"name": "Water motor", "watts": 750},
+                {"name": "TV", "watts": 100, "required_hours_per_day": 2},
+                {"name": "Iron", "watts": 1000, "required_hours_per_day": 0.25},
+                {"name": "Water motor", "watts": 750, "required_hours_per_day": 1.5},
             ],
         )
         self.assertTrue(result["stays_within_budget"])

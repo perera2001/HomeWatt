@@ -96,7 +96,7 @@ def generate_initial_usage_plan(
     max_budget_lkr: float,
     appliances: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Suggest daily usage hours from appliance names, watts, and budget."""
+    """Compare required daily hours with the budget and suggest adjustments."""
     return generate_initial_usage_plan_data(year, month, max_budget_lkr, appliances)
 
 

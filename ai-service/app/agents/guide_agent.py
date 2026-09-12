@@ -21,9 +21,11 @@ class GuideWriterResponse(BaseModel):
 GUIDE_WRITER_SYSTEM_PROMPT = (
     "You are the Guide Writer Agent for HomeWatt Advisor. Write a clear "
     "electricity usage guide using only the calculated MCP tool results in the "
-    "state. Mention the user's budget, allowed units, recommended usage per "
-    "appliance, total units, estimated bill, and whether the plan stays within "
-    "budget. Do not perform your own tariff calculation."
+    "state. Distinguish required requested hours from suggested affordable "
+    "hours. Never change numbers, calculate a tariff, or claim requirements "
+    "were met after hours were reduced. Clearly state when the budget is below "
+    "the minimum zero-unit bill. Do not invent appliances or values. End each "
+    "successful plan with a short practical electricity-saving instruction."
 )
 
 
@@ -42,44 +44,93 @@ def _money(value: float) -> str:
     return f"Rs. {value:,.2f}"
 
 
+def _saving_instruction(state: HomeWattState) -> str:
+    names = {
+        item.get("normalized_name", item.get("name", "").lower())
+        for item in state.get("requested_plan", {}).get("appliances", [])
+    }
+    if any("iron" in name for name in names) and any("tv" in name for name in names):
+        return (
+            "To reduce your bill, batch ironing into fewer sessions and reduce "
+            "unnecessary TV usage before reducing essential appliance use."
+        )
+    return (
+        "To reduce your bill, reduce low-priority appliance use first and switch "
+        "devices off instead of leaving them on standby."
+    )
+
+
 def _format_plan_answer(state: HomeWattState) -> str:
     month_name = calendar.month_name[state["month"]]
-    usage_plan = state.get("usage_plan", {})
-    appliances = usage_plan.get("appliances", [])
+    requested_plan = state.get("requested_plan", {})
+    requested_items = requested_plan.get("appliances", [])
 
     lines = [
         f"Your HomeWatt Advisor usage plan for {month_name} {state['year']}:",
-        (
-            f"Your budget is {_money(state['max_budget_lkr'])}. "
-            f"Estimated allowed units are around {state['estimated_allowed_units']} kWh."
-        ),
-        "Recommended usage:",
+        f"Maximum budget: {_money(state['max_budget_lkr'])}",
+        f"Minimum budget required for requested usage: {_money(state['minimum_required_budget'])}",
     ]
 
-    for item in appliances:
+    if not state["budget_feasible"]:
+        lines.extend(
+            [
+                f"Minimum possible bill, even at zero units: {_money(state['minimum_possible_bill'])}",
+                f"Budget shortfall for your requirements: {_money(state['budget_shortfall'])}",
+                "",
+                (
+                    "No electricity usage plan can remain within "
+                    f"{_money(state['max_budget_lkr'])} under the current tariff because "
+                    "the fixed charge and SSC levy already exceed the budget."
+                ),
+                (
+                    "Increase the budget above the minimum possible bill and reduce "
+                    "non-essential appliance usage first."
+                ),
+            ]
+        )
+        return "\n".join(lines)
+
+    if state["requirements_met"]:
+        lines.extend([f"Remaining budget: {_money(state['remaining_budget'])}", "Requested usage:"])
+        for item in requested_items:
+            lines.append(
+                f"- {item['name']} ({item['watts']:g}W): "
+                f"{item['required_hours_per_day']:g} required hours/day, "
+                f"{item['requested_monthly_units']:.2f} kWh/month."
+            )
+        lines.extend(
+            [
+                f"Total units: {state['total_units']:g} kWh.",
+                f"Estimated bill: {_money(state['estimated_bill'])}.",
+                "All requested usage requirements are satisfied.",
+                _saving_instruction(state),
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"Budget shortfall for requested usage: {_money(state['budget_shortfall'])}",
+            "The exact requested usage exceeds your budget, so adjustments are required.",
+            "Requested hours -> suggested affordable hours:",
+        ]
+    )
+    affordable_items = state.get("affordable_plan", {}).get("appliances", [])
+    for item in affordable_items:
+        change = "reduced" if not item["requirement_met"] else "unchanged"
         lines.append(
-            "- "
-            f"{item['name']} ({item['watts']:g}W): "
-            f"{item['suggested_hours_per_day']:g} hours/day, "
-            f"about {item['estimated_monthly_units']:g} units/month "
-            f"({item['priority']} priority)."
+            f"- {item['name']} ({item['watts']:g}W, {item['priority']} priority): "
+            f"{item['required_hours_per_day']:g} -> {item['suggested_hours_per_day']:g} "
+            f"hours/day ({change}), {item['estimated_monthly_units']:.2f} kWh/month."
         )
 
     lines.extend(
         [
-            f"Total estimated units: {state['total_units']} kWh.",
-            f"Estimated bill: {_money(state['estimated_bill'])}.",
+            f"Adjusted total units: {state['total_units']:g} kWh.",
+            f"Adjusted estimated bill: {_money(state['estimated_bill'])}.",
+            "The adjusted plan stays within budget, but not all original requirements are satisfied.",
+            _saving_instruction(state),
         ]
-    )
-
-    if state["stays_within_budget"]:
-        lines.append("This plan stays within your budget.")
-    else:
-        lines.append("This plan is above your budget, so reduce low-priority usage first.")
-
-    lines.append(
-        "Practical advice: batch high-wattage appliance use, avoid unnecessary entertainment "
-        "loads, and protect essential water and cooling needs first."
     )
 
     return "\n".join(lines)
@@ -144,12 +195,18 @@ async def guide_writer_node(state: HomeWattState) -> HomeWattState:
         }
 
     if state.get("error"):
+        example = ""
+        if "Example:" not in state["error"]:
+            example = (
+                " Example: My budget is Rs. 3000 for May 2026. I need TV 100W "
+                "for 2 hours/day, iron 1000W for 15 minutes/day, and water motor "
+                "750W for 1.5 hours/day."
+            )
         return {
             **state,
             "final_answer": (
                 "I could not create a HomeWatt usage plan yet. "
-                f"{state['error']} Example: My budget is Rs. 3000 for May 2026. "
-                "I have TV 100W, iron 1000W and water motor 750W."
+                f"{state['error']}{example}"
             ),
         }
 

@@ -71,9 +71,16 @@ Authorization: Bearer your_shared_secret_here
 {
   "user_id": 1,
   "session_id": 1,
-  "message": "My budget is Rs. 3000 for May 2026. I have TV 100W, iron 1000W and water motor 750W."
+  "message": "My maximum budget is Rs. 600 for May 2026. I need TV 100W for 2 hours/day, iron 1000W for 15 minutes/day, and water motor 750W for 1.5 hours/day."
 }
 ```
+
+Every appliance must include its name, watts, and required daily usage. Accepted
+phrases include `2 hours/day`, `for 0.5 hours per day`, and `30 minutes per day`.
+The planner first calculates the exact requested plan. If it exceeds the budget,
+it returns a separate affordable plan by reducing low-, then medium-, then
+high-priority usage. A budget below the fixed-charge and SSC minimum returns no
+affordable plan.
 
 ## Run MCP Server
 

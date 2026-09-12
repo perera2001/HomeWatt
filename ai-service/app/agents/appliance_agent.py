@@ -13,6 +13,7 @@ from app.agents.tools import (
     validate_appliance_input_tool,
 )
 from app.graph.state import HomeWattState
+from app.mcp_client.client import MCPClientError
 
 
 MONTHS = {
@@ -48,6 +49,7 @@ GREETING_WORDS = {"hi", "hello", "hey", "hai"}
 class ExtractedAppliance(BaseModel):
     name: str
     watts: float
+    required_hours_per_day: float
 
 
 class ApplianceExtraction(BaseModel):
@@ -60,10 +62,13 @@ class ApplianceExtraction(BaseModel):
 
 APPLIANCE_ANALYZER_SYSTEM_PROMPT = (
     "You are the Appliance Analyzer Agent for HomeWatt Advisor. Extract year, "
-    "month, maximum budget in LKR, and appliance names with watts from the "
-    "user's message. Do not calculate electricity bills. Do not guess missing "
-    "watts. If required information is missing, return a clear error. Use "
-    "tools to validate input and classify appliance priorities."
+    "month, maximum budget in LKR, and each appliance's name, watts, and "
+    "required_hours_per_day from the user's message. Accept hours per day, "
+    "hours/day, daily for N hours, and convert daily minutes to hours. Do not "
+    "calculate electricity bills. Never guess missing watts or required hours. "
+    "Required hours must be greater than 0 and no more than 24. If information "
+    "is missing, return a clear error. Use tools to validate input and classify "
+    "appliance priorities."
 )
 
 
@@ -112,7 +117,8 @@ def _extract_budget(message: str) -> float | None:
 
 def _clean_appliance_name(name: str) -> str:
     cleaned = re.sub(
-        r"^(?:and|with|i\s+have|we\s+have|have|has|a|an|the)\s+",
+        r"^(?:(?:and|with|i\s+have|we\s+have|have|has|a|an|the|"
+        r"i\s+need\s+to\s+use|i\s+need|use|need)\s+)+",
         "",
         name.strip(),
         flags=re.I,
@@ -122,27 +128,66 @@ def _clean_appliance_name(name: str) -> str:
 
 def _extract_appliances(message: str) -> list[dict[str, Any]]:
     appliance_pattern = re.compile(
-        r"([a-zA-Z][a-zA-Z ]*?)\s+(\d+(?:\.\d+)?)\s*(?:w|watts)\b",
+        r"([a-zA-Z][a-zA-Z ]*?)\s+(-?\d+(?:\.\d+)?)\s*(?:w|watts)\b",
         re.IGNORECASE,
     )
+    matches = list(appliance_pattern.finditer(message))
     appliances = []
-    for match in appliance_pattern.finditer(message):
+    for index, match in enumerate(matches):
         raw_name = match.group(1)
         # Keep only the text after the latest separator before the watt value.
         name = re.split(r"[,.;]|\band\b", raw_name, flags=re.IGNORECASE)[-1]
         name = _clean_appliance_name(name)
         if name:
-            appliances.append({"name": name, "watts": float(match.group(2))})
+            # Stop at the next watt value, leaving the current daily-usage phrase
+            # available even when the next regex match begins in that phrase.
+            next_start = (
+                matches[index + 1].start(2) if index + 1 < len(matches) else len(message)
+            )
+            usage_text = message[match.end():next_start]
+            hours_match = re.search(
+                r"(?:daily\s+for\s+|for\s+)?(-?\d+(?:\.\d+)?)\s*"
+                r"(hours?|hrs?|minutes?|mins?)\s*(?:per\s+day|/\s*day|daily)\b"
+                r"|daily\s+for\s+(-?\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)\b",
+                usage_text,
+                re.IGNORECASE,
+            )
+            required_hours = None
+            if hours_match:
+                amount = float(hours_match.group(1) or hours_match.group(3))
+                unit = (hours_match.group(2) or hours_match.group(4)).lower()
+                required_hours = amount / 60 if unit.startswith("min") else amount
+            appliances.append(
+                {
+                    "name": name,
+                    "watts": float(match.group(2)),
+                    "required_hours_per_day": required_hours,
+                }
+            )
     return appliances
 
 
 def _fallback_extract(message: str) -> ApplianceExtraction:
     month, year = _extract_month_year(message)
     budget = _extract_budget(message)
-    appliances = [
-        ExtractedAppliance(name=item["name"], watts=item["watts"])
-        for item in _extract_appliances(message)
+    extracted_appliances = _extract_appliances(message)
+    missing_hours = [
+        item["name"]
+        for item in extracted_appliances
+        if item["required_hours_per_day"] is None
     ]
+    if missing_hours:
+        return ApplianceExtraction(
+            year=year,
+            month=month,
+            max_budget_lkr=budget,
+            error=(
+                "Please include required hours per day for every appliance. "
+                "Example: water motor 750W for 1.5 hours/day."
+            ),
+        )
+
+    appliances = [ExtractedAppliance(**item) for item in extracted_appliances]
     return ApplianceExtraction(
         year=year,
         month=month,
@@ -156,7 +201,12 @@ def _extraction_from_agent_result(result: dict) -> ApplianceExtraction:
     if isinstance(structured, ApplianceExtraction):
         return structured
     if isinstance(structured, dict):
-        return ApplianceExtraction(**structured)
+        try:
+            return ApplianceExtraction(**structured)
+        except ValueError:
+            return ApplianceExtraction(
+                error="Please include required hours per day for every appliance."
+            )
 
     content = result.get("messages", [])[-1].content if result.get("messages") else "{}"
     try:
@@ -180,7 +230,15 @@ def _missing_fields_error(extraction: ApplianceExtraction) -> str | None:
     )
     if validation["is_valid"]:
         return None
-    return "Please include " + ", ".join(validation["errors"]) + "."
+    if any(
+        "required hours per day must be provided" in item
+        for item in validation["errors"]
+    ):
+        return (
+            "Please include required hours per day for every appliance. "
+            "Example: water motor 750W for 1.5 hours/day."
+        )
+    return "Please correct the following: " + ", ".join(validation["errors"]) + "."
 
 
 async def _classify_appliances(appliances: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -204,7 +262,8 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
             "casual_response": "Hi, how can I assist you today?",
         }
 
-    if has_openai_config():
+    used_openai = has_openai_config()
+    if used_openai:
         try:
             agent = create_appliance_analyzer_agent()
             result = await agent.ainvoke(
@@ -224,6 +283,13 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
         extraction = _fallback_extract(message)
 
     error = _missing_fields_error(extraction)
+    if error and used_openai:
+        fallback_extraction = _fallback_extract(message)
+        fallback_error = _missing_fields_error(fallback_extraction)
+        if not fallback_error:
+            extraction = fallback_extraction
+            error = None
+
     if error:
         return {
             **state,
@@ -231,7 +297,13 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
         }
 
     appliances = [item.model_dump() for item in extraction.appliances]
-    appliance_priorities = await _classify_appliances(appliances)
+    try:
+        appliance_priorities = await _classify_appliances(appliances)
+    except MCPClientError as exc:
+        return {
+            **state,
+            "error": f"Could not classify appliance priorities: {exc}",
+        }
 
     return {
         **state,

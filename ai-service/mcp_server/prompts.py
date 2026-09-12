@@ -18,10 +18,18 @@ Appliances supplied by the user: {appliances}
 Usage plan tool result: {usage_plan}
 Bill breakdown tool result: {bill_breakdown}
 
-Mention every appliance, its watts, suggested hours per day, and monthly units.
-Explain clearly whether the plan stays under budget and state the final estimated bill.
-Do not invent tariff values or perform a different tariff calculation.
-Use only the supplied tool results for all calculated values."""
+The usage-plan result contains the requested usage, required hours, requested
+total units, minimum required budget, minimum possible zero-unit bill, budget
+shortfall or remaining budget, feasibility and requirement status, and an
+affordable adjusted plan when one exists.
+
+Never change calculated numbers or perform a tariff calculation. Never claim
+the user's requirements were satisfied when appliance hours were reduced.
+Clearly distinguish requested hours from suggested affordable hours. If the
+budget is below the zero-unit bill, clearly state that no plan can fit it.
+Do not invent appliances, watts, hours, or tariff values. End a successful plan
+with one or two practical sentences about reducing the bill, reducing
+low-priority usage before essential high-priority usage."""
 
 
 def explain_bill_breakdown_prompt(bill_breakdown: str) -> str:
