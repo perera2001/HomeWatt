@@ -54,8 +54,8 @@ class HomeWattWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["usage_plan"]["year"], 2026)
         self.assertIn("estimated_bill", state["usage_plan"])
         self.assertEqual(state["appliances"][1]["required_hours_per_day"], 0.25)
-        self.assertNotIn("tariff_resource", state)
-        self.assertNotIn("appliance_rules_resource", state)
+        self.assertEqual(state["tariff_resource"]["tariff_version"], "2026-05")
+        self.assertIn("TV", state["priority_rules_resource"])
 
     async def test_unsupported_request_stops_before_planning(self):
         result = await run_homewatt_workflow(

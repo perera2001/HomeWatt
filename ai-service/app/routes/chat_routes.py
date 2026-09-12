@@ -8,7 +8,11 @@ from app.schemas import ChatRequest, ChatResponse
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
-@router.post("", response_model=ChatResponse)
+@router.post(
+    "",
+    response_model=ChatResponse,
+    response_model_exclude_none=True,
+)
 async def chat(
     request: ChatRequest,
     _: None = Depends(verify_internal_token),
@@ -20,5 +24,4 @@ async def chat(
     )
     return ChatResponse(
         answer=result["answer"],
-        mcp_result=result.get("state"),
     )
