@@ -168,6 +168,11 @@ async def _write_answer_with_agent(state: HomeWattState) -> str:
         }
     )
 
+    planning_state = {
+        key: value
+        for key, value in state.items()
+        if key not in {"conversation_history", "previous_plan"}
+    }
     agent = create_guide_writer_agent()
     result = await agent.ainvoke(
         {
@@ -177,7 +182,7 @@ async def _write_answer_with_agent(state: HomeWattState) -> str:
                     "content": (
                         f"{grounded_prompt}\n\n"
                         "Use this final workflow state. Do not change any numbers:\n"
-                        f"{dumps_for_prompt(state)}"
+                        f"{dumps_for_prompt(planning_state)}"
                     ),
                 }
             ]

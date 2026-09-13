@@ -9,6 +9,8 @@ from langchain_core.tools import tool
 from app.mcp_client.client import (
     classify_appliance_priority_via_mcp,
     get_mcp_prompt,
+    read_appliance_priority_rules_via_mcp,
+    read_tariff_resource_via_mcp,
 )
 
 
@@ -22,7 +24,7 @@ def validate_appliance_input_tool(
     """Validate extracted planning details without performing calculations."""
     try:
         appliances = json.loads(appliances_json)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         appliances = []
 
     errors = []
@@ -37,10 +39,13 @@ def validate_appliance_input_tool(
         or max_budget_lkr <= 0
     ):
         errors.append("budget must be greater than 0")
-    if not appliances:
+    if not isinstance(appliances, list) or not appliances:
         errors.append("at least one appliance with watts and required hours per day is required")
 
-    for appliance in appliances or []:
+    for appliance in appliances if isinstance(appliances, list) else []:
+        if not isinstance(appliance, dict):
+            errors.append("each appliance must contain name, watts, and required hours per day")
+            continue
         name = str(appliance.get("name", "")).strip()
         watts = appliance.get("watts")
         required_hours = appliance.get("required_hours_per_day")
@@ -74,6 +79,10 @@ def validate_appliance_input_tool(
     return {
         "is_valid": not errors,
         "errors": errors,
+        "year": year,
+        "month": month,
+        "max_budget_lkr": max_budget_lkr,
+        "appliances": appliances if isinstance(appliances, list) else [],
     }
 
 
@@ -81,6 +90,18 @@ def validate_appliance_input_tool(
 async def classify_appliance_priority_tool(item_name: str) -> dict[str, Any]:
     """Classify an appliance priority through the MCP server."""
     return await classify_appliance_priority_via_mcp(item_name)
+
+
+@tool
+async def read_tariff_resource_tool() -> dict[str, Any]:
+    """Read the Sri Lankan domestic tariff MCP resource."""
+    return await read_tariff_resource_via_mcp()
+
+
+@tool
+async def read_appliance_priority_rules_tool() -> dict[str, Any]:
+    """Read the appliance-priority MCP resource."""
+    return await read_appliance_priority_rules_via_mcp()
 
 
 @tool

@@ -7,6 +7,8 @@ class HomeWattState(TypedDict, total=False):
     user_id: int
     session_id: int | None
     message: str
+    conversation_history: list[dict[str, str]]
+    previous_plan: dict[str, Any] | None
 
     is_valid: bool
     intent: str
@@ -17,13 +19,11 @@ class HomeWattState(TypedDict, total=False):
     max_budget_lkr: float
     appliances: list[dict[str, Any]]
     appliance_priorities: list[dict[str, Any]]
-    priority_rules_resource: dict[str, Any]
 
     billing_days: int
     estimated_allowed_units: float
     estimated_bill_at_limit: float
     budget_limit_result: dict[str, Any]
-    tariff_resource: dict[str, Any]
 
     usage_plan: dict[str, Any]
     requested_plan: dict[str, Any]

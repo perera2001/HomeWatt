@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from langchain.agents import create_agent
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from app.agents.llm import create_chat_model, has_openai_config
@@ -13,10 +14,6 @@ from app.agents.tools import (
     validate_appliance_input_tool,
 )
 from app.graph.state import HomeWattState
-from app.mcp_client.client import (
-    MCPClientError,
-    read_appliance_priority_rules_via_mcp,
-)
 
 
 MONTHS = {
@@ -69,9 +66,19 @@ APPLIANCE_ANALYZER_SYSTEM_PROMPT = (
     "required_hours_per_day from the user's message. Accept hours per day, "
     "hours/day, daily for N hours, and convert daily minutes to hours. Do not "
     "calculate electricity bills. Never guess missing watts or required hours. "
-    "Required hours must be greater than 0 and no more than 24. If information "
-    "is missing, return a clear error. Use tools to validate input and classify "
-    "appliance priorities."
+    "Required hours must be greater than 0 and no more than 24. Never invent "
+    "validation results, appliance priorities, normalized names, category notes, "
+    "or priority rules. For every planning request, you must follow this exact "
+    "sequence: (1) extract all fields, (2) call validate_appliance_input_tool "
+    "exactly once with all extracted appliances encoded as JSON, (3) if validation "
+    "fails, stop and return the validation error, (4) call "
+    "classify_appliance_priority_tool exactly once for each extracted appliance, "
+    "using its original name, and (5) produce the final structured response. "
+    "Recent messages and a previous-plan summary may be provided for follow-up "
+    "input. Use only explicit relevant values from that context. Current explicit "
+    "values override previous values, and a clearly new plan must not inherit an "
+    "unrelated old plan. Tool results are authoritative. Do not skip, repeat, or "
+    "replace these calls."
 )
 
 
@@ -79,7 +86,10 @@ def create_appliance_analyzer_agent():
     """Create the LLM-powered appliance analyzer agent."""
     return create_agent(
         model=create_chat_model(),
-        tools=[validate_appliance_input_tool, classify_appliance_priority_tool],
+        tools=[
+            validate_appliance_input_tool,
+            classify_appliance_priority_tool,
+        ],
         system_prompt=APPLIANCE_ANALYZER_SYSTEM_PROMPT,
         response_format=ApplianceExtraction,
         name="appliance_analyzer_agent",
@@ -201,60 +211,191 @@ def _fallback_extract(message: str) -> ApplianceExtraction:
     )
 
 
-def _extraction_from_agent_result(result: dict) -> ApplianceExtraction:
-    structured = result.get("structured_response")
-    if isinstance(structured, ApplianceExtraction):
-        return structured
-    if isinstance(structured, dict):
+def _parse_tool_message_content(message: ToolMessage) -> Any | None:
+    """Parse a tool result without trusting the agent's final response."""
+    if getattr(message, "status", None) == "error":
+        return None
+
+    content = message.content
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
         try:
-            return ApplianceExtraction(**structured)
-        except ValueError:
-            return ApplianceExtraction(
-                error="Please include required hours per day for every appliance."
-            )
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(content, list) and len(content) == 1:
+        block = content[0]
+        if isinstance(block, dict):
+            if isinstance(block.get("text"), str):
+                try:
+                    return json.loads(block["text"])
+                except json.JSONDecodeError:
+                    return None
+            return block
+    return None
 
-    content = result.get("messages", [])[-1].content if result.get("messages") else "{}"
-    try:
-        return ApplianceExtraction(**json.loads(content))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return ApplianceExtraction(error="Could not extract the planning details.")
+
+def _tool_results(result: dict[str, Any], tool_name: str) -> list[Any | None]:
+    return [
+        _parse_tool_message_content(message)
+        for message in result.get("messages", [])
+        if isinstance(message, ToolMessage) and message.name == tool_name
+    ]
 
 
-def _missing_fields_error(extraction: ApplianceExtraction) -> str | None:
-    if extraction.error:
-        return extraction.error
+def _find_single_tool_result(
+    result: dict[str, Any], tool_name: str, action: str, result_label: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    matches = _tool_results(result, tool_name)
+    if not matches:
+        return None, f"The appliance analyzer did not {action}. Please try again."
+    if len(matches) != 1:
+        return None, f"The appliance analyzer repeated {action}. Please try again."
+    if not isinstance(matches[0], dict):
+        return None, f"The appliance analyzer received an invalid {result_label} result."
+    return matches[0], None
 
-    appliances = [item.model_dump() for item in extraction.appliances]
-    validation = validate_appliance_input_tool.invoke(
-        {
-            "year": extraction.year or 0,
-            "month": extraction.month or 0,
-            "max_budget_lkr": extraction.max_budget_lkr or 0,
-            "appliances_json": json.dumps(appliances),
-        }
-    )
+
+def _validation_error(validation: dict[str, Any]) -> str | None:
+    if not isinstance(validation.get("is_valid"), bool):
+        return "The appliance analyzer received an invalid validation result."
+    errors = validation.get("errors")
+    if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
+        return "The appliance analyzer received an invalid validation result."
     if validation["is_valid"]:
         return None
-    if any(
-        "required hours per day must be provided" in item
-        for item in validation["errors"]
-    ):
+    if any("required hours per day must be provided" in item for item in errors):
         return (
             "Please include required hours per day for every appliance. "
             "Example: water motor 750W for 1.5 hours/day."
         )
-    return "Please correct the following: " + ", ".join(validation["errors"]) + "."
+    return "Please correct the following: " + ", ".join(errors) + "."
 
 
-async def _classify_appliances(appliances: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    priorities = []
-    for appliance in appliances:
-        priorities.append(
-            await classify_appliance_priority_tool.ainvoke(
-                {"item_name": appliance["name"]}
-            )
+def _validated_input(
+    validation: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    year = validation.get("year")
+    month = validation.get("month")
+    budget = validation.get("max_budget_lkr")
+    appliances = validation.get("appliances")
+    if (
+        not isinstance(year, int)
+        or isinstance(year, bool)
+        or not isinstance(month, int)
+        or isinstance(month, bool)
+        or isinstance(budget, bool)
+        or not isinstance(budget, (int, float))
+        or not isinstance(appliances, list)
+        or not appliances
+        or not all(isinstance(item, dict) for item in appliances)
+    ):
+        return None, "The appliance analyzer received an invalid validation result."
+    return {
+        "year": year,
+        "month": month,
+        "max_budget_lkr": budget,
+        "appliances": appliances,
+    }, None
+
+
+def _appliance_key(name: Any) -> str:
+    return re.sub(r"\s+", " ", str(name).strip()).casefold()
+
+
+def _collect_priority_results(
+    result: dict[str, Any], appliances: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    matches = _tool_results(result, classify_appliance_priority_tool.name)
+    if any(not isinstance(item, dict) for item in matches):
+        return None, "The appliance analyzer received an invalid priority result."
+
+    priorities = [item for item in matches if isinstance(item, dict)]
+    required_keys = {
+        "item_name",
+        "normalized_name",
+        "priority",
+        "category_note",
+    }
+    if any(
+        not required_keys.issubset(item)
+        or item["priority"] not in {"high", "medium", "low"}
+        or not all(
+            isinstance(item[key], str) and item[key].strip()
+            for key in required_keys
         )
-    return priorities
+        for item in priorities
+    ):
+        return None, "The appliance analyzer received an invalid priority result."
+
+    remaining = list(priorities)
+    ordered = []
+    for appliance in appliances:
+        appliance_name = appliance.get("name")
+        matching_indexes = [
+            index
+            for index, priority in enumerate(remaining)
+            if _appliance_key(priority["item_name"]) == _appliance_key(appliance_name)
+        ]
+        if not matching_indexes:
+            return (
+                None,
+                f"The appliance analyzer did not classify {appliance_name}. "
+                "Please try again.",
+            )
+        if len(matching_indexes) > 1:
+            return (
+                None,
+                f"The appliance analyzer classified {appliance_name} more than once.",
+            )
+        ordered.append(remaining.pop(matching_indexes[0]))
+
+    if remaining:
+        return None, "The appliance analyzer returned an unexpected priority result."
+    return ordered, None
+
+
+def _previous_plan_context(plan: dict[str, Any] | None) -> str | None:
+    if not plan:
+        return None
+    appliance_parts = []
+    for appliance in plan.get("appliances", []):
+        appliance_parts.append(
+            f"{appliance.get('name')} {appliance.get('watts')}W for "
+            f"{appliance.get('required_hours_per_day')} hours/day"
+        )
+    return (
+        "Previous successful plan, available only when the current request refers "
+        f"to or modifies it: year {plan.get('year')}, month {plan.get('month')}, "
+        f"maximum budget LKR {plan.get('max_budget_lkr')}, appliances: "
+        + "; ".join(appliance_parts)
+        + ". Current explicit values override these values."
+    )
+
+
+def _needs_previous_context(message: str) -> bool:
+    lowered = message.lower()
+    if re.search(
+        r"\b(change|add|remove|replace|set|update|recalculate|my plan|my bill|it)\b",
+        lowered,
+    ):
+        return True
+    has_hours = bool(re.search(r"\b(?:hours?|hrs?|minutes?|mins?)\b", lowered))
+    has_appliance_watts = bool(_extract_appliances(message))
+    has_budget_only = bool(_extract_budget(message)) and not has_appliance_watts
+    return (has_hours and not has_appliance_watts) or has_budget_only
+
+
+def _appliance_agent_messages(state: HomeWattState) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if _needs_previous_context(state.get("message", "")):
+        previous_context = _previous_plan_context(state.get("previous_plan"))
+        if previous_context:
+            messages.append({"role": "system", "content": previous_context})
+        messages.extend(dict(item) for item in state.get("conversation_history", []))
+    messages.append({"role": "user", "content": state.get("message", "")})
+    return messages
 
 
 async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
@@ -274,62 +415,51 @@ async def appliance_analyzer_node(state: HomeWattState) -> HomeWattState:
             "error": fallback_extraction.error,
         }
 
-    used_openai = has_openai_config()
-    if used_openai:
-        try:
-            agent = create_appliance_analyzer_agent()
-            result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": message,
-                        }
-                    ]
-                }
-            )
-            extraction = _extraction_from_agent_result(result)
-        except Exception:
-            extraction = fallback_extraction
-    else:
-        extraction = fallback_extraction
+    if not has_openai_config():
+        return {
+            **state,
+            "error": "The appliance analyzer is unavailable. Please try again later.",
+        }
 
-    error = _missing_fields_error(extraction)
-    if error and used_openai:
-        fallback_error = _missing_fields_error(fallback_extraction)
-        if not fallback_error:
-            extraction = fallback_extraction
-            error = None
+    try:
+        agent = create_appliance_analyzer_agent()
+        result = await agent.ainvoke(
+            {"messages": _appliance_agent_messages(state)}
+        )
+    except Exception:
+        return {
+            **state,
+            "error": "Could not complete appliance analysis. Please try again.",
+        }
 
+    validation, error = _find_single_tool_result(
+        result,
+        validate_appliance_input_tool.name,
+        "validate the appliance details",
+        "appliance validation",
+    )
     if error:
-        return {
-            **state,
-            "error": error,
-        }
+        return {**state, "error": error}
 
-    appliances = [item.model_dump() for item in extraction.appliances]
-    try:
-        priority_rules_resource = await read_appliance_priority_rules_via_mcp()
-    except MCPClientError as exc:
-        return {
-            **state,
-            "error": f"Could not read appliance priority rules: {exc}",
-        }
+    error = _validation_error(validation)
+    if error:
+        return {**state, "error": error}
 
-    try:
-        appliance_priorities = await _classify_appliances(appliances)
-    except MCPClientError as exc:
-        return {
-            **state,
-            "error": f"Could not classify appliance priorities: {exc}",
-        }
+    validated, error = _validated_input(validation)
+    if error:
+        return {**state, "error": error}
+
+    appliance_priorities, error = _collect_priority_results(
+        result, validated["appliances"]
+    )
+    if error:
+        return {**state, "error": error}
 
     return {
         **state,
-        "year": extraction.year,
-        "month": extraction.month,
-        "max_budget_lkr": extraction.max_budget_lkr,
-        "appliances": appliances,
+        "year": validated["year"],
+        "month": validated["month"],
+        "max_budget_lkr": validated["max_budget_lkr"],
+        "appliances": validated["appliances"],
         "appliance_priorities": appliance_priorities,
-        "priority_rules_resource": priority_rules_resource,
     }

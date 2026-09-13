@@ -19,7 +19,7 @@ uvicorn app.main:app --reload --port 8000
 
 ## Chat Workflow
 
-Current `/chat` flow:
+Current `/chat` planning flow:
 
 ```text
 FastAPI /chat
@@ -32,7 +32,29 @@ FastAPI /chat
  -> Final answer
 ```
 
+The Supervisor also routes greetings, general saving advice, previous-plan
+follow-ups, tariff information, priority information, and unrelated requests to
+focused terminal paths. Tariff and appliance-priority MCP Resources are read only
+for their matching informational questions, not during normal usage planning.
+
 Bill and usage calculations stay inside MCP tools. If `OPENAI_API_KEY` is empty, the workflow uses beginner-readable rule-based fallback for supervisor, extraction, and guide writing.
+
+## Local Conversation Memory
+
+The Python service keeps up to 12 recent user/assistant messages and the latest
+successful plan in a process-local dictionary keyed by both `user_id` and
+`session_id`. Entries expire after two hours. This supports plan follow-up
+questions and incremental appliance input without exposing memory in `/chat`
+responses.
+
+This memory is intended only for local development and demos:
+
+- It is lost whenever the Python process restarts.
+- It is not shared between multiple Uvicorn workers.
+- MySQL chat history in the Node.js backend remains separate from Python AI memory.
+- Redis, a database, or a LangGraph persistent checkpointer can replace it later.
+
+Requests with `session_id: null` run normally but do not use cross-request memory.
 
 ## Internal Service Token
 

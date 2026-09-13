@@ -2,59 +2,52 @@
 
 import json
 import re
+from typing import Literal
 
 from langchain.agents import create_agent
-from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from app.agents.llm import create_chat_model, has_openai_config
 from app.graph.state import HomeWattState
 
 
+HomeWattIntent = Literal[
+    "usage_plan",
+    "plan_followup",
+    "general_saving_advice",
+    "tariff_information",
+    "priority_information",
+    "greeting",
+    "out_of_scope",
+]
+
+
 class SupervisorDecision(BaseModel):
     is_valid_request: bool
+    intent: HomeWattIntent
     reason: str
 
 
 SUPERVISOR_SYSTEM_PROMPT = (
-    "You are the Supervisor Agent for HomeWatt Advisor. Your job is to decide "
-    "whether the user is asking for a Sri Lankan home electricity usage plan. "
-    "If the request includes electricity bill budget, appliances, watts, usage "
-    "planning, or bill control, mark it as valid. Do not calculate bills. Do "
-    "not invent tariff values."
+    "You are the Supervisor Agent for HomeWatt Advisor. Classify the current "
+    "message as usage_plan, plan_followup, general_saving_advice, "
+    "tariff_information, priority_information, greeting, or out_of_scope. A "
+    "usage_plan includes a new plan or an explicit plan change that must be "
+    "recalculated. A plan_followup asks about the latest calculated plan without "
+    "changing numeric inputs. Tariff questions concern Sri Lankan tariff slabs, "
+    "prices, fixed charges, SSC, billing days, versions, effective dates, or bill "
+    "calculation. Priority questions concern general appliance-priority rules. "
+    "Use recent history only to resolve references in the current message. Never "
+    "let old context override a clear current request. Only out_of_scope is an "
+    "invalid request. Do not calculate bills or invent tariff values."
 )
-
-
-@tool
-def detect_homewatt_intent(message: str) -> dict:
-    """Detect whether a message is about HomeWatt electricity planning."""
-    lowered = message.lower()
-    keywords = [
-        "electric",
-        "bill",
-        "budget",
-        "watt",
-        "usage",
-        "unit",
-        "appliance",
-        "kwh",
-    ]
-    is_valid = any(keyword in lowered for keyword in keywords)
-    return {
-        "is_valid_request": is_valid,
-        "reason": (
-            "User is asking for electricity usage planning"
-            if is_valid
-            else "User is not asking for electricity usage planning"
-        ),
-    }
 
 
 def create_supervisor_agent():
     """Create the LLM-powered supervisor agent."""
     return create_agent(
         model=create_chat_model(),
-        tools=[detect_homewatt_intent],
+        tools=[],
         system_prompt=SUPERVISOR_SYSTEM_PROMPT,
         response_format=SupervisorDecision,
         name="supervisor_agent",
@@ -67,15 +60,115 @@ def _is_casual_greeting(message: str) -> bool:
     return bool(words) and words.issubset({"hi", "hello", "hey", "hai"})
 
 
-def _fallback_supervisor_decision(message: str) -> SupervisorDecision:
+def _decision(intent: HomeWattIntent, reason: str) -> SupervisorDecision:
+    return SupervisorDecision(
+        is_valid_request=intent != "out_of_scope",
+        intent=intent,
+        reason=reason,
+    )
+
+
+def _fallback_supervisor_decision(
+    message: str,
+    has_previous_plan: bool = False,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> SupervisorDecision:
+    lowered = message.lower().strip()
+
     if _is_casual_greeting(message):
-        return SupervisorDecision(
-            is_valid_request=True,
-            reason="User sent a casual greeting",
+        return _decision("greeting", "User sent a casual greeting")
+
+    if any(
+        phrase in lowered
+        for phrase in (
+            "tariff",
+            "unit price",
+            "unit rate",
+            "fixed charge",
+            "ssc",
+            "levy",
+            "billing day",
+            "effective date",
+            "tariff version",
+            "bill calculated",
+            "bill is calculated",
+            "calculate a bill",
+            "calculate the bill",
+        )
+    ):
+        return _decision("tariff_information", "User is asking about tariff information")
+
+    if "generally" in lowered or "general advice" in lowered:
+        return _decision(
+            "general_saving_advice",
+            "User is asking for general electricity-saving advice",
         )
 
-    detection = detect_homewatt_intent.invoke({"message": message})
-    return SupervisorDecision(**detection)
+    modification = bool(
+        re.search(r"\b(change|add|remove|replace|set|update|recalculate)\b", lowered)
+    )
+    planning_value = bool(
+        re.search(
+            r"\b\d+(?:\.\d+)?\s*(?:w|watts?|hours?|hrs?|minutes?|mins?|/day)\b",
+            lowered,
+        )
+        or re.search(r"\b(?:rs\.?|lkr)\s*\d", lowered)
+        or re.search(r"\b(?:budget|maximum bill)\b", lowered)
+    )
+    if modification or planning_value:
+        return _decision("usage_plan", "User supplied or changed usage-plan inputs")
+
+    followup_phrases = (
+        "decrease my bill",
+        "reduce my bill",
+        "my plan",
+        "my result",
+        "my required budget",
+        "which appliance should i reduce",
+        "explain my bill",
+        "why is my",
+    )
+    if any(phrase in lowered for phrase in followup_phrases):
+        return _decision("plan_followup", "User is asking about a previous plan")
+
+    if any(
+        phrase in lowered
+        for phrase in (
+            "priority rule",
+            "high priority",
+            "medium priority",
+            "low priority",
+            "appliance priority",
+            "appliance types",
+            "normally reduced first",
+        )
+    ):
+        return _decision(
+            "priority_information",
+            "User is asking about appliance-priority information",
+        )
+
+    if has_previous_plan and re.search(
+        r"\b(it|that appliance|the plan|the bill|reduce it|explain it)\b", lowered
+    ):
+        return _decision("plan_followup", "User referred to the previous plan")
+
+    if any(
+        keyword in lowered
+        for keyword in ("electric", "save energy", "save electricity", "household bill")
+    ):
+        return _decision(
+            "general_saving_advice",
+            "User is asking for household electricity-saving advice",
+        )
+
+    if conversation_history and re.fullmatch(
+        r"\s*\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)(?:\s*(?:per|/)\s*day)?[.!]?\s*",
+        lowered,
+    ):
+        return _decision("usage_plan", "User completed an earlier appliance input")
+
+    return _decision("out_of_scope", "User is not asking about HomeWatt topics")
 
 
 def _decision_from_agent_result(result: dict) -> SupervisorDecision:
@@ -86,56 +179,51 @@ def _decision_from_agent_result(result: dict) -> SupervisorDecision:
         return SupervisorDecision(**structured)
 
     content = result.get("messages", [])[-1].content if result.get("messages") else "{}"
-    try:
-        return SupervisorDecision(**json.loads(content))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return SupervisorDecision(
-            is_valid_request=False,
-            reason="Could not understand whether this is an electricity planning request",
-        )
+    return SupervisorDecision(**json.loads(content))
+
+
+def _supervisor_messages(state: HomeWattState) -> list[dict[str, str]]:
+    messages = [dict(item) for item in state.get("conversation_history", [])]
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                "A previous successful plan exists."
+                if state.get("previous_plan")
+                else "No previous successful plan exists."
+            ),
+        }
+    )
+    messages.append({"role": "user", "content": state.get("message", "")})
+    return messages
 
 
 async def supervisor_node(state: HomeWattState) -> HomeWattState:
-    """Decide whether the workflow should continue."""
+    """Classify the request before any domain tools or resources run."""
     message = state.get("message", "")
+    history = state.get("conversation_history", [])
 
     if _is_casual_greeting(message):
-        decision = SupervisorDecision(
-            is_valid_request=True,
-            reason="User sent a casual greeting",
-        )
+        decision = _decision("greeting", "User sent a casual greeting")
     elif has_openai_config():
         try:
             agent = create_supervisor_agent()
-            result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": message,
-                        }
-                    ]
-                }
-            )
+            result = await agent.ainvoke({"messages": _supervisor_messages(state)})
             decision = _decision_from_agent_result(result)
         except Exception:
-            decision = _fallback_supervisor_decision(message)
+            decision = _fallback_supervisor_decision(
+                message, bool(state.get("previous_plan")), history
+            )
     else:
-        decision = _fallback_supervisor_decision(message)
+        decision = _fallback_supervisor_decision(
+            message, bool(state.get("previous_plan")), history
+        )
 
-    if not decision.is_valid_request:
-        return {
-            **state,
-            "is_valid": False,
-            "supervisor_decision": decision.model_dump(),
-            "error": (
-                "I can help with Sri Lankan home electricity usage planning, "
-                "bill budgets, appliances, watts, and usage control."
-            ),
-        }
+    decision = _decision(decision.intent, decision.reason)
 
     return {
         **state,
-        "is_valid": True,
+        "is_valid": decision.is_valid_request,
+        "intent": decision.intent,
         "supervisor_decision": decision.model_dump(),
     }

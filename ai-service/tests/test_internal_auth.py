@@ -57,6 +57,7 @@ class InternalAuthTests(unittest.TestCase):
         response = self.client.post("/chat", json=self.payload)
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"answer": "Hi, how can I assist you today?"})
 
 
 if __name__ == "__main__":
