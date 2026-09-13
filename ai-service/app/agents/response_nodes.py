@@ -63,6 +63,11 @@ async def direct_response_node(state: HomeWattState) -> HomeWattState:
     intent = state.get("intent")
     if intent == "greeting":
         answer = "Hi, how can I assist you today?"
+    elif intent == "form_required":
+        answer = (
+            "To calculate a usage plan, add your appliances in the table first. "
+            "After the plan is created, use chat to ask questions about that plan."
+        )
     elif intent == "general_saving_advice":
         answer = (
             "Switch off unused lights and devices, avoid standby power, use "

@@ -17,6 +17,7 @@ HomeWattIntent = Literal[
     "general_saving_advice",
     "tariff_information",
     "priority_information",
+    "form_required",
     "greeting",
     "out_of_scope",
 ]
@@ -30,10 +31,10 @@ class SupervisorDecision(BaseModel):
 
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are the Supervisor Agent for HomeWatt Advisor. Classify the current "
-    "message as usage_plan, plan_followup, general_saving_advice, "
-    "tariff_information, priority_information, greeting, or out_of_scope. A "
-    "usage_plan includes a new plan or an explicit plan change that must be "
-    "recalculated. A plan_followup asks about the latest calculated plan without "
+    "message as plan_followup, general_saving_advice, tariff_information, "
+    "priority_information, greeting, or out_of_scope. Usage plans are created "
+    "only from structured form inputs, not from free-text chat. A plan_followup "
+    "asks about the latest calculated plan without "
     "changing numeric inputs. Tariff questions concern Sri Lankan tariff slabs, "
     "prices, fixed charges, SSC, billing days, versions, effective dates, or bill "
     "calculation. Priority questions concern general appliance-priority rules. "
@@ -104,24 +105,15 @@ def _fallback_supervisor_decision(
             "User is asking for general electricity-saving advice",
         )
 
-    modification = bool(
-        re.search(r"\b(change|add|remove|replace|set|update|recalculate)\b", lowered)
-    )
-    planning_value = bool(
-        re.search(
-            r"\b\d+(?:\.\d+)?\s*(?:w|watts?|hours?|hrs?|minutes?|mins?|/day)\b",
-            lowered,
-        )
-        or re.search(r"\b(?:rs\.?|lkr)\s*\d", lowered)
-        or re.search(r"\b(?:budget|maximum bill)\b", lowered)
-    )
-    if modification or planning_value:
-        return _decision("usage_plan", "User supplied or changed usage-plan inputs")
+    if _is_planning_text(message):
+        return _decision("form_required", "Usage plans require structured form inputs")
 
     followup_phrases = (
         "decrease my bill",
         "reduce my bill",
+        "reduce this bill",
         "my plan",
+        "latest plan",
         "my result",
         "my required budget",
         "which appliance should i reduce",
@@ -162,13 +154,23 @@ def _fallback_supervisor_decision(
             "User is asking for household electricity-saving advice",
         )
 
-    if conversation_history and re.fullmatch(
-        r"\s*\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)(?:\s*(?:per|/)\s*day)?[.!]?\s*",
-        lowered,
-    ):
-        return _decision("usage_plan", "User completed an earlier appliance input")
-
     return _decision("out_of_scope", "User is not asking about HomeWatt topics")
+
+
+def _is_planning_text(message: str) -> bool:
+    lowered = message.lower().strip()
+    modification = bool(
+        re.search(r"\b(change|add|remove|replace|set|update|recalculate)\b", lowered)
+    )
+    planning_value = bool(
+        re.search(
+            r"\b\d+(?:\.\d+)?\s*(?:w|watts?|hours?|hrs?|minutes?|mins?|/day)\b",
+            lowered,
+        )
+        or re.search(r"\b(?:rs\.?|lkr)\s*\d", lowered)
+        or re.search(r"\b(?:budget|maximum bill)\b", lowered)
+    )
+    return modification or planning_value
 
 
 def _decision_from_agent_result(result: dict) -> SupervisorDecision:
@@ -203,23 +205,32 @@ async def supervisor_node(state: HomeWattState) -> HomeWattState:
     message = state.get("message", "")
     history = state.get("conversation_history", [])
 
-    if _is_casual_greeting(message):
+    if state.get("structured_input"):
+        decision = _decision("usage_plan", "User supplied structured usage-plan inputs")
+    elif _is_casual_greeting(message):
         decision = _decision("greeting", "User sent a casual greeting")
-    elif has_openai_config():
-        try:
-            agent = create_supervisor_agent()
-            result = await agent.ainvoke({"messages": _supervisor_messages(state)})
-            decision = _decision_from_agent_result(result)
-        except Exception:
-            decision = _fallback_supervisor_decision(
-                message, bool(state.get("previous_plan")), history
-            )
+    elif _is_planning_text(message):
+        decision = _decision("form_required", "Usage plans require structured form inputs")
     else:
-        decision = _fallback_supervisor_decision(
+        fallback_decision = _fallback_supervisor_decision(
             message, bool(state.get("previous_plan")), history
         )
+        if fallback_decision.intent != "out_of_scope":
+            decision = fallback_decision
+        elif has_openai_config():
+            try:
+                agent = create_supervisor_agent()
+                result = await agent.ainvoke({"messages": _supervisor_messages(state)})
+                decision = _decision_from_agent_result(result)
+            except Exception:
+                decision = fallback_decision
+        else:
+            decision = fallback_decision
 
-    decision = _decision(decision.intent, decision.reason)
+    if not state.get("structured_input") and decision.intent == "usage_plan":
+        decision = _decision("form_required", "Usage plans require structured form inputs")
+    else:
+        decision = _decision(decision.intent, decision.reason)
 
     return {
         **state,

@@ -21,7 +21,21 @@ async def chat(
         user_id=request.user_id,
         session_id=request.session_id,
         message=request.message,
+        year=request.year,
+        month=request.month,
+        max_budget_lkr=request.max_budget_lkr,
+        appliances=(
+            [appliance.model_dump() for appliance in request.appliances]
+            if request.appliances is not None
+            else None
+        ),
+        previous_plan=request.previous_plan,
     )
     return ChatResponse(
         answer=result["answer"],
+        plan_snapshot=(
+            result.get("plan_snapshot")
+            if request.include_plan_snapshot
+            else None
+        ),
     )

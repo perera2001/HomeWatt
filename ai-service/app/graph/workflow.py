@@ -129,6 +129,11 @@ async def run_homewatt_workflow(
     user_id: int,
     session_id: int | None,
     message: str,
+    year: int | None = None,
+    month: int | None = None,
+    max_budget_lkr: float | None = None,
+    appliances: list[dict[str, Any]] | None = None,
+    previous_plan: dict[str, Any] | None = None,
 ) -> dict:
     """Run the workflow and update process-local conversation memory."""
     memory = (
@@ -136,26 +141,43 @@ async def run_homewatt_workflow(
         if session_id is not None
         else None
     )
+    memory_plan = memory["last_successful_plan"] if memory else None
     initial_state: HomeWattState = {
         "user_id": user_id,
         "session_id": session_id,
         "message": message,
         "conversation_history": memory["messages"] if memory else [],
-        "previous_plan": memory["last_successful_plan"] if memory else None,
+        "previous_plan": memory_plan or previous_plan,
     }
+    if (
+        year is not None
+        and month is not None
+        and max_budget_lkr is not None
+        and appliances
+    ):
+        initial_state.update(
+            {
+                "structured_input": True,
+                "structured_year": year,
+                "structured_month": month,
+                "structured_max_budget_lkr": max_budget_lkr,
+                "structured_appliances": appliances,
+            }
+        )
     final_state = await homewatt_graph.ainvoke(initial_state)
     answer = final_state.get("final_answer", "")
 
     if session_id is not None:
         await append_conversation_turn(user_id, session_id, message, answer)
         if _is_successful_plan(final_state):
-            await save_successful_plan(
-                user_id,
-                session_id,
-                _safe_plan_snapshot(final_state),
-            )
+            await save_successful_plan(user_id, session_id, _safe_plan_snapshot(final_state))
 
     return {
         "answer": answer,
         "state": final_state,
+        "plan_snapshot": (
+            _safe_plan_snapshot(final_state)
+            if _is_successful_plan(final_state)
+            else None
+        ),
     }

@@ -1,16 +1,11 @@
 """Tests for household-required hours and affordable planning."""
 
-import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.agents.appliance_agent import (
-    _fallback_extract,
-)
 from app.agents.bill_agent import bill_calculator_node
 from app.agents.guide_agent import _format_plan_answer
 from app.agents.optimizer_agent import usage_optimizer_node
-from app.agents.tools import validate_appliance_input_tool
 from app.mcp_client.client import MCPClientError
 from mcp_server.appliance_rules import generate_initial_usage_plan_data
 from mcp_server.tariff_data import calculate_domestic_bill_data
@@ -21,44 +16,6 @@ APPLIANCES = [
     {"name": "Iron", "watts": 1000, "required_hours_per_day": 0.25},
     {"name": "Water motor", "watts": 750, "required_hours_per_day": 1.5},
 ]
-
-
-class ApplianceExtractionTests(unittest.IsolatedAsyncioTestCase):
-    def test_fallback_extracts_hours_and_minutes(self):
-        extraction = _fallback_extract(
-            "My budget is Rs. 600 for May 2026. TV 100W for 2 hours per day, "
-            "iron 1000W daily for 15 minutes and water motor 750W 30 minutes/day."
-        )
-        self.assertEqual(
-            [item.required_hours_per_day for item in extraction.appliances],
-            [2, 0.25, 0.5],
-        )
-
-    def test_missing_required_hours_has_clear_error(self):
-        extraction = _fallback_extract(
-            "My budget is Rs. 600 for May 2026. TV 100W."
-        )
-        self.assertEqual(
-            extraction.error,
-            "Please enter required hours per day for TV. Example: TV 100W for 2 hours/day.",
-        )
-
-    def test_hours_range_validation(self):
-        for hours, expected in ((0, "greater than 0"), (-1, "greater than 0"), (25, "must not exceed 24")):
-            with self.subTest(hours=hours):
-                validation = validate_appliance_input_tool.invoke(
-                    {
-                        "year": 2026,
-                        "month": 5,
-                        "max_budget_lkr": 600,
-                        "appliances_json": json.dumps(
-                            [{"name": "TV", "watts": 100, "required_hours_per_day": hours}]
-                        ),
-                    }
-                )
-                self.assertFalse(validation["is_valid"])
-                self.assertIn(expected, validation["errors"][0])
-
 
 
 class PersonalizedPlanTests(unittest.TestCase):

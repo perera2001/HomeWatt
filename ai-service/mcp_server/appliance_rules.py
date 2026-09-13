@@ -97,6 +97,24 @@ def classify_appliance_priority_data(item_name: str) -> dict[str, str]:
     }
 
 
+def _priority_from_appliance(
+    appliance: dict[str, Any], classification: dict[str, str]
+) -> dict[str, str]:
+    supplied_priority = appliance.get("priority")
+    if supplied_priority in {"high", "medium", "low"}:
+        notes = {
+            "high": "User marked this appliance as high priority.",
+            "medium": "User marked this appliance as medium priority.",
+            "low": "User marked this appliance as low priority.",
+        }
+        return {
+            **classification,
+            "priority": supplied_priority,
+            "category_note": str(appliance.get("category_note") or notes[supplied_priority]),
+        }
+    return classification
+
+
 def _reduce_priority_group(
     plan: list[dict[str, Any]],
     priority: str,
@@ -199,7 +217,10 @@ def generate_initial_usage_plan_data(
         name = appliance.get("name")
         watts = appliance.get("watts")
         required_hours = appliance.get("required_hours_per_day")
-        classification = classify_appliance_priority_data(name)
+        classification = _priority_from_appliance(
+            appliance,
+            classify_appliance_priority_data(name),
+        )
         if required_hours is None:
             raise ValueError(f"required_hours_per_day is required for {name}")
         if isinstance(required_hours, bool) or not isinstance(required_hours, (int, float)):

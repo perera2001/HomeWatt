@@ -18,6 +18,11 @@ class HomeWattState(TypedDict, total=False):
     month: int
     max_budget_lkr: float
     appliances: list[dict[str, Any]]
+    structured_input: bool
+    structured_year: int
+    structured_month: int
+    structured_max_budget_lkr: float
+    structured_appliances: list[dict[str, Any]]
     appliance_priorities: list[dict[str, Any]]
 
     billing_days: int

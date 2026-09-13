@@ -68,6 +68,25 @@ class ApplianceToolTests(unittest.TestCase):
         result = classify_appliance_priority_data("Desktop computer")
         self.assertEqual(result["priority"], "medium")
 
+    def test_usage_plan_respects_user_supplied_priority(self):
+        result = generate_initial_usage_plan_data(
+            2026,
+            5,
+            600,
+            [
+                {
+                    "name": "Desktop computer",
+                    "watts": 1000,
+                    "required_hours_per_day": 1,
+                    "priority": "low",
+                },
+            ],
+        )
+
+        item = result["requested_plan"]["appliances"][0]
+        self.assertEqual(item["priority"], "low")
+        self.assertEqual(item["category_note"], "User marked this appliance as low priority.")
+
     def test_usage_plan_respects_normal_budget(self):
         result = generate_initial_usage_plan_data(
             2026,

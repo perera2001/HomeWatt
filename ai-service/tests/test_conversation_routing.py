@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import ToolMessage
 
-from app.agents.appliance_agent import appliance_analyzer_node
 from app.agents.information_agent import (
     create_information_agent,
     information_node,
@@ -24,7 +23,7 @@ from app.memory.session_memory import (
     get_session_memory,
     save_successful_plan,
 )
-from tests.test_appliance_agent import ONE_APPLIANCE, _agent_result
+from tests.test_appliance_agent import ONE_APPLIANCE
 
 
 TEST_PLAN = {
@@ -131,6 +130,19 @@ class ConversationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("2 required hours/day", result["answer"])
         self.assertIn("1.5 suggested hours/day", result["answer"])
 
+    async def test_obvious_followup_does_not_wait_for_supervisor_llm(self):
+        await save_successful_plan(301, 401, TEST_PLAN)
+        settings.openai_api_key = "configured"
+
+        with patch("app.agents.supervisor.create_supervisor_agent") as create_agent:
+            result = await run_homewatt_workflow(
+                301, 401, "Which appliance should I reduce first?"
+            )
+
+        create_agent.assert_not_called()
+        self.assertEqual(result["state"]["intent"], "plan_followup")
+        self.assertIn("Reduce unnecessary TV usage first", result["answer"])
+
     async def test_followup_without_plan_requests_a_plan(self):
         result = await run_homewatt_workflow(
             301, 402, "How can I decrease my bill?"
@@ -174,7 +186,7 @@ class SupervisorRoutingTests(unittest.TestCase):
     def test_fallback_supports_all_intents(self):
         cases = {
             "hello": "greeting",
-            "My budget is LKR 5000 for September 2026.": "usage_plan",
+            "My budget is LKR 5000 for September 2026.": "form_required",
             "How can I decrease my bill?": "plan_followup",
             "How can I generally reduce my household electricity bill?": "general_saving_advice",
             "How is a Sri Lankan domestic bill calculated?": "tariff_information",
@@ -189,81 +201,6 @@ class SupervisorRoutingTests(unittest.TestCase):
                     decision.is_valid_request,
                     expected != "out_of_scope",
                 )
-
-
-class ApplianceConversationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_complete_new_plan_does_not_receive_stale_context(self):
-        message = "My budget is Rs. 600 for May 2026. TV 100W for 2 hours/day."
-        with patch(
-            "app.agents.appliance_agent.has_openai_config", return_value=True
-        ), patch(
-            "app.agents.appliance_agent.create_appliance_analyzer_agent"
-        ) as create_agent:
-            create_agent.return_value.ainvoke = AsyncMock(
-                return_value=_agent_result(ONE_APPLIANCE)
-            )
-            await appliance_analyzer_node(
-                {
-                    "message": message,
-                    "conversation_history": [
-                        {"role": "user", "content": "Old unrelated plan"}
-                    ],
-                    "previous_plan": TEST_PLAN,
-                }
-            )
-
-        sent_messages = create_agent.return_value.ainvoke.await_args.args[0]["messages"]
-        self.assertEqual(sent_messages, [{"role": "user", "content": message}])
-
-    async def test_incremental_hours_receive_previous_tv_context(self):
-        history = [
-            {"role": "user", "content": "My TV is 100W."},
-            {
-                "role": "assistant",
-                "content": "Please enter required hours per day for TV.",
-            },
-        ]
-        with patch(
-            "app.agents.appliance_agent.has_openai_config", return_value=True
-        ), patch(
-            "app.agents.appliance_agent.create_appliance_analyzer_agent"
-        ) as create_agent:
-            create_agent.return_value.ainvoke = AsyncMock(
-                return_value=_agent_result(ONE_APPLIANCE)
-            )
-            state = await appliance_analyzer_node(
-                {
-                    "message": "2 hours per day.",
-                    "conversation_history": history,
-                    "previous_plan": None,
-                }
-            )
-
-        sent_messages = create_agent.return_value.ainvoke.await_args.args[0]["messages"]
-        self.assertEqual(sent_messages[0], history[0])
-        self.assertEqual(sent_messages[-1]["content"], "2 hours per day.")
-        self.assertEqual(state["appliances"], ONE_APPLIANCE)
-
-    async def test_current_explicit_value_overrides_previous_plan_result(self):
-        updated = [{**ONE_APPLIANCE[0], "required_hours_per_day": 1.0}]
-        previous = {**TEST_PLAN, "appliances": ONE_APPLIANCE}
-        with patch(
-            "app.agents.appliance_agent.has_openai_config", return_value=True
-        ), patch(
-            "app.agents.appliance_agent.create_appliance_analyzer_agent"
-        ) as create_agent:
-            create_agent.return_value.ainvoke = AsyncMock(
-                return_value=_agent_result(updated)
-            )
-            state = await appliance_analyzer_node(
-                {
-                    "message": "Change my TV usage to 1 hour/day.",
-                    "conversation_history": [],
-                    "previous_plan": previous,
-                }
-            )
-
-        self.assertEqual(state["appliances"][0]["required_hours_per_day"], 1.0)
 
 
 class InformationAgentTests(unittest.IsolatedAsyncioTestCase):
