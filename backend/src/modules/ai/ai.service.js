@@ -8,7 +8,43 @@ const chatPlaceholder = () => {
   };
 };
 
-const sendChatMessageToAiService = async ({ userId, sessionId, message }) => {
+const formatAiServiceError = (data) => {
+  if (!data) {
+    return 'AI service request failed';
+  }
+
+  if (typeof data.detail === 'string') {
+    return `AI service request failed: ${data.detail}`;
+  }
+
+  if (Array.isArray(data.detail)) {
+    const details = data.detail
+      .map((item) => item?.msg || item?.message)
+      .filter(Boolean)
+      .join(', ');
+
+    if (details) {
+      return `AI service request failed: ${details}`;
+    }
+  }
+
+  if (typeof data.message === 'string') {
+    return `AI service request failed: ${data.message}`;
+  }
+
+  return 'AI service request failed';
+};
+
+const sendChatMessageToAiService = async ({
+  userId,
+  sessionId,
+  message,
+  year,
+  month,
+  maxBudgetLkr,
+  appliances,
+  previousPlan
+}) => {
   const baseUrl = env.aiService.url.replace(/\/+$/, '');
   const headers = {};
 
@@ -22,7 +58,13 @@ const sendChatMessageToAiService = async ({ userId, sessionId, message }) => {
       {
         user_id: userId,
         session_id: sessionId,
-        message
+        message,
+        year,
+        month,
+        max_budget_lkr: maxBudgetLkr,
+        appliances,
+        previous_plan: previousPlan || null,
+        include_plan_snapshot: true
       },
       {
         headers,
@@ -34,7 +76,10 @@ const sendChatMessageToAiService = async ({ userId, sessionId, message }) => {
       throw new ApiError(502, 'AI service returned an invalid response');
     }
 
-    return response.data.answer.trim();
+    return {
+      answer: response.data.answer.trim(),
+      planSnapshot: response.data.plan_snapshot || null
+    };
   } catch (error) {
     if (error instanceof ApiError) {
       throw error;
@@ -42,6 +87,10 @@ const sendChatMessageToAiService = async ({ userId, sessionId, message }) => {
 
     if (axios.isAxiosError(error) && !error.response) {
       throw new ApiError(503, 'AI service is currently unavailable');
+    }
+
+    if (axios.isAxiosError(error) && error.response) {
+      throw new ApiError(502, formatAiServiceError(error.response.data));
     }
 
     throw new ApiError(502, 'AI service request failed');

@@ -2,6 +2,8 @@ const pool = require('../../config/db');
 const ApiError = require('../../utils/apiError');
 const aiService = require('../ai/ai.service');
 
+let planSnapshotColumnReady = false;
+
 const parseSessionId = (sessionId) => {
   const parsedId = Number(sessionId);
 
@@ -18,6 +20,60 @@ const createTitle = (message) => {
   }
 
   return `${message.slice(0, 47)}...`;
+};
+
+const ensurePlanSnapshotColumn = async () => {
+  if (planSnapshotColumnReady) {
+    return;
+  }
+
+  try {
+    await pool.execute(
+      'ALTER TABLE chat_sessions ADD COLUMN plan_snapshot JSON NULL'
+    );
+  } catch (error) {
+    if (error.code !== 'ER_DUP_FIELDNAME') {
+      throw error;
+    }
+  }
+
+  planSnapshotColumnReady = true;
+};
+
+const getPlanSnapshot = async (userId, sessionId) => {
+  await ensurePlanSnapshotColumn();
+
+  const [rows] = await pool.execute(
+    'SELECT plan_snapshot FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1',
+    [sessionId, userId]
+  );
+  const snapshot = rows[0]?.plan_snapshot;
+
+  if (!snapshot) {
+    return null;
+  }
+
+  if (typeof snapshot === 'string') {
+    try {
+      return JSON.parse(snapshot);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  return snapshot;
+};
+
+const savePlanSnapshot = async (userId, sessionId, planSnapshot) => {
+  if (!planSnapshot) {
+    return;
+  }
+
+  await ensurePlanSnapshotColumn();
+  await pool.execute(
+    'UPDATE chat_sessions SET plan_snapshot = ? WHERE id = ? AND user_id = ?',
+    [JSON.stringify(planSnapshot), sessionId, userId]
+  );
 };
 
 const saveUserMessage = async (userId, sessionId, message) => {
@@ -88,20 +144,38 @@ const saveAssistantMessage = async (userId, sessionId, answer) => {
   }
 };
 
-const createChatResponse = async (userId, { session_id: sessionId, message } = {}) => {
+const createChatResponse = async (
+  userId,
+  {
+    session_id: sessionId,
+    message,
+    year,
+    month,
+    max_budget_lkr: maxBudgetLkr,
+    appliances
+  } = {}
+) => {
   if (typeof message !== 'string' || !message.trim()) {
     throw new ApiError(400, 'Message is required and cannot be empty');
   }
 
   const cleanMessage = message.trim();
   const activeSessionId = await saveUserMessage(userId, sessionId, cleanMessage);
-  const assistantResponse = await aiService.sendChatMessageToAiService({
+  const previousPlan = await getPlanSnapshot(userId, activeSessionId);
+  const aiResponse = await aiService.sendChatMessageToAiService({
     userId,
     sessionId: activeSessionId,
-    message: cleanMessage
+    message: cleanMessage,
+    year,
+    month,
+    maxBudgetLkr,
+    appliances,
+    previousPlan
   });
+  const assistantResponse = aiResponse.answer;
 
   await saveAssistantMessage(userId, activeSessionId, assistantResponse);
+  await savePlanSnapshot(userId, activeSessionId, aiResponse.planSnapshot);
 
   return {
     session_id: activeSessionId,
